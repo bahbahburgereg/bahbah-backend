@@ -2,7 +2,7 @@
   "version": 2,
   "builds": [
     {
-      "src": "noss-kofta/package.json",
+      "src": "bahbah-burger/package.json",
       "use": "@vercel/static-build",
       "config": { "distDir": "dist" }
     }
@@ -10,7 +10,7 @@
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "/noss-kofta/$1"
+      "dest": "/bahbah-burger/$1"
     }
   ]
 }

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Routes, Route, Link, useNavigate } from 'react-router-dom';
-const API_URL = "https://noss-kofta-production-d57f.up.railway.app";
+const API_URL = "https://bahbah-burger-production-d57f.up.railway.app";
 const translations = {
   ar: {
     home: "الرئيسية",
@@ -318,7 +318,7 @@ const AdminDashboard = ({ menuItems, categories, siteSettings, lang, fetchItems,
 
   const fetchZones = async () => {
     try {
-const res = await fetch('https://noss-kofta-production-d57f.up.railway.app/api/zones');
+const res = await fetch('https://bahbah-burger-production-d57f.up.railway.app/api/zones');
       const data = await res.json();
       setDeliveryZones(data);
     } catch (err) {}
@@ -332,7 +332,7 @@ const res = await fetch('https://noss-kofta-production-d57f.up.railway.app/api/z
     e.preventDefault();
     if (!zoneName.trim() || !zoneFee) return;
     try {
-      const res = await fetch('https://noss-kofta-production-d57f.up.railway.app/api/zones', {
+      const res = await fetch('https://bahbah-burger-production-d57f.up.railway.app/api/zones', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name: zoneName.trim(), fee: Number(zoneFee) })
@@ -348,7 +348,7 @@ const res = await fetch('https://noss-kofta-production-d57f.up.railway.app/api/z
   const handleDeleteZone = async (id) => {
     if (!window.confirm("حذف هذه المنطقة؟")) return;
     try {
-      const res = await fetch(`https://noss-kofta-production-d57f.up.railway.app/api/zones/${id}`, { method: 'DELETE' });
+      const res = await fetch(`https://bahbah-burger-production-d57f.up.railway.app/api/zones/${id}`, { method: 'DELETE' });
       if (res.ok) fetchZones();
     } catch (err) {}
   };
@@ -425,7 +425,7 @@ const res = await fetch('https://noss-kofta-production-d57f.up.railway.app/api/z
   const handleSaveSettings = async (e) => {
     e.preventDefault();
     try {
-      const res = await fetch('https://noss-kofta-production-d57f.up.railway.app/api/settings', {
+      const res = await fetch('https://bahbah-burger-production-d57f.up.railway.app/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ 
@@ -456,7 +456,7 @@ const res = await fetch('https://noss-kofta-production-d57f.up.railway.app/api/z
     try {
       await Promise.all(
         newCategories.map((cat, idx) => 
-          fetch(`https://noss-kofta-production-d57f.up.railway.app/api/categories/${cat._id}`, {
+          fetch(`https://bahbah-burger-production-d57f.up.railway.app/api/categories/${cat._id}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ order: idx })
@@ -530,13 +530,13 @@ const res = await fetch('https://noss-kofta-production-d57f.up.railway.app/api/z
     try {
       let res;
       if (editCatId) {
-        res = await fetch(`https://noss-kofta-production-d57f.up.railway.app/api/categories/${editCatId}`, {
+        res = await fetch(`https://bahbah-burger-production-d57f.up.railway.app/api/categories/${editCatId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: catName.trim() })
         });
       } else {
-        res = await fetch('https://noss-kofta-production-d57f.up.railway.app/api/categories', {
+        res = await fetch('https://bahbah-burger-production-d57f.up.railway.app/api/categories', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name: catName.trim() })
@@ -559,7 +559,7 @@ const res = await fetch('https://noss-kofta-production-d57f.up.railway.app/api/z
   const handleDeleteCategory = async (id) => {
     if (!window.confirm("Delete?")) return;
     try {
-      const res = await fetch(`https://noss-kofta-production-d57f.up.railway.app/api/categories/${id}`, { method: 'DELETE' });
+      const res = await fetch(`https://bahbah-burger-production-d57f.up.railway.app/api/categories/${id}`, { method: 'DELETE' });
       if (res.ok) fetchCategories();
     } catch (err) {}
   };
@@ -607,13 +607,13 @@ const res = await fetch('https://noss-kofta-production-d57f.up.railway.app/api/z
     try {
       let res;
       if (editId) {
-        res = await fetch(`https://noss-kofta-production-d57f.up.railway.app/api/items/${editId}`, {
+        res = await fetch(`https://bahbah-burger-production-d57f.up.railway.app/api/items/${editId}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(itemData)
         });
       } else {
-        res = await fetch('https://noss-kofta-production-d57f.up.railway.app/api/items', {
+        res = await fetch('https://bahbah-burger-production-d57f.up.railway.app/api/items', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(itemData)
@@ -656,7 +656,7 @@ const res = await fetch('https://noss-kofta-production-d57f.up.railway.app/api/z
   const handleDeleteItem = async (id) => {
     if (!window.confirm("Delete item?")) return;
     try {
-      const res = await fetch(`https://noss-kofta-production-d57f.up.railway.app/api/items/${id}`, { method: 'DELETE' });
+      const res = await fetch(`https://bahbah-burger-production-d57f.up.railway.app/api/items/${id}`, { method: 'DELETE' });
       if (res.ok) fetchItems();
     } catch (err) {}
   };
@@ -1028,7 +1028,7 @@ const CartPage = ({ cart, setCart, lang }) => {
   const [customerAddress, setCustomerAddress] = useState('');
 
   useEffect(() => {
-    fetch('https://noss-kofta-production-d57f.up.railway.app/api/zones')
+    fetch('https://bahbah-burger-production-d57f.up.railway.app/api/zones')
       .then(res => res.json())
       .then(data => {
         setDeliveryZones(data);
@@ -1241,7 +1241,7 @@ function App() {
 
   const fetchItems = async () => {
     try {
-      const res = await fetch('https://noss-kofta-production-d57f.up.railway.app/api/items');
+      const res = await fetch('https://bahbah-burger-production-d57f.up.railway.app/api/items');
       const data = await res.json();
       setMenuItems(data);
     } catch (err) {}
@@ -1249,7 +1249,7 @@ function App() {
 
   const fetchCategories = async () => {
     try {
-      const res = await fetch('https://noss-kofta-production-d57f.up.railway.app/api/categories');
+      const res = await fetch('https://bahbah-burger-production-d57f.up.railway.app/api/categories');
       const data = await res.json();
       setCategories(data);
     } catch (err) {}
@@ -1257,7 +1257,7 @@ function App() {
 
   const fetchSettings = async () => {
     try {
-      const res = await fetch('https://noss-kofta-production-d57f.up.railway.app/api/settings');
+      const res = await fetch('https://bahbah-burger-production-d57f.up.railway.app/api/settings');
       const data = await res.json();
       setSiteSettings(data);
     } catch (err) {}
