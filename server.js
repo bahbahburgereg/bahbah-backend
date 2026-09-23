@@ -116,23 +116,37 @@ const itemSchema = new mongoose.Schema({
     default: 0
   },
 
+  // ⭐ النظام القديم (متروك عشان الأصناف القديمة تفضل شغالة)
   addons: [
     {
       name: String,
       price: Number
     }
   ],
-
   boxItems: [
     {
       name: String
     }
   ],
-
   sizes: [
     {
       name: String,
       price: Number
+    }
+  ],
+
+  // ⭐ النظام الجديد: مجموعات التعديلات (Modifier Groups)
+  modifierGroups: [
+    {
+      name: String,
+      min: Number,
+      max: Number,
+      options: [
+        {
+          name: String,
+          price: Number
+        }
+      ]
     }
   ]
 });
@@ -394,10 +408,7 @@ app.post("/api/items", async (req, res) => {
     const newItem = new Item({
       name: req.body.name,
       price: Number(req.body.price),
-
-      // ⭐ الخصم بيتحفظ هنا صراحة
       discount: discountValue,
-
       image: req.body.image || "https://via.placeholder.com/400x300/222/FFD700?text=Bahbah+Burger",
       description: req.body.description,
       extras: req.body.extras,
@@ -410,7 +421,8 @@ app.post("/api/items", async (req, res) => {
       order: count,
       addons: req.body.addons || [],
       boxItems: req.body.boxItems || [],
-      sizes: req.body.sizes || []
+      sizes: req.body.sizes || [],
+      modifierGroups: req.body.modifierGroups || [] // ⭐ استقبال وحفظ النظام الجديد
     });
 
     const savedItem = await newItem.save();
@@ -443,10 +455,7 @@ app.put("/api/items/:id", async (req, res) => {
 
     const updateData = {
       ...req.body,
-
       price: Number(req.body.price),
-
-      // ⭐ مهم جدًا
       discount: discountValue
     };
 

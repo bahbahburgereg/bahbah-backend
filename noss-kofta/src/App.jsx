@@ -1102,7 +1102,7 @@ const CartPage = ({ cart, setCart, lang }) => {
     }
     message += `💰 *الإجمالي النهائي: ${grandTotal} جنيه*%0A`;
     
-    const whatsappUrl = `https://wa.me/201042258982?text=${message}`;
+    const whatsappUrl = `https://wa.me/201042281510?text=${message}`;
     window.open(whatsappUrl, '_blank');
   };
 
