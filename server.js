@@ -134,8 +134,6 @@ const Shift = mongoose.model("Shift", shiftSchema);
 // =========================
 // AUTH (الكاشير / الأدمن)
 // =========================
-// الأدمن: اليوزر "admin" والباسورد من متغير ADMIN_PASSWORD في Railway (مش مكتوب في الكود).
-// الكاشيرات: حسابات في الداتابيز بيعملها الأدمن من شاشة الكاشير.
 const AUTH_SECRET = process.env.AUTH_SECRET || "";
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
 const ADMIN_USERNAME = "admin";
@@ -144,7 +142,7 @@ const authReady = AUTH_SECRET.length >= 24 && ADMIN_PASSWORD.length >= 8;
 
 if (!authReady) {
   console.error(
-    "⚠️ نظام الدخول مقفول: لازم تضيف AUTH_SECRET (24 حرف أو أكتر) و ADMIN_PASSWORD (8 حروف أو أكتر) في Variables بتاعة Railway. الموقع والمنيو شغالين عادي، بس شاشة الكاشير ولوحة الإدارة مش هيفتحوا."
+    "⚠️ نظام الدخول مقفول: لازم تضيف AUTH_SECRET (24 حرف أو أكتر) و ADMIN_PASSWORD (8 حروف أو أكتر) في Variables بتاعة Railway."
   );
 }
 
@@ -335,7 +333,7 @@ app.post("/api/auth/login", async (req, res) => {
   }
 });
 
-// ---------- إدارة الكاشيرات (للأدمن فقط) ----------
+// ---------- إدارة الكاشيرات ----------
 const USERNAME_RE = /^[a-z0-9_.-]{3,30}$/;
 
 app.get("/api/staff", requireAuth, requireAdmin, async (req, res) => {
@@ -354,13 +352,9 @@ app.post("/api/staff", requireAuth, requireAdmin, async (req, res) => {
     const password = String(req.body?.password || "");
 
     if (!name) return res.status(400).json({ error: "اكتب اسم الكاشير" });
-    if (!USERNAME_RE.test(username)) {
-      return res.status(400).json({ error: "اسم المستخدم لازم يكون إنجليزي وأرقام (من 3 لـ 30 حرف) من غير مسافات" });
-    }
+    if (!USERNAME_RE.test(username)) return res.status(400).json({ error: "اسم المستخدم لازم يكون إنجليزي وأرقام من 3 لـ 30 حرف" });
     if (username === ADMIN_USERNAME) return res.status(400).json({ error: "اسم المستخدم ده محجوز" });
-    if (password.length < 6 || password.length > 100) {
-      return res.status(400).json({ error: "الباسورد لازم يكون 6 حروف أو أرقام على الأقل" });
-    }
+    if (password.length < 6 || password.length > 100) return res.status(400).json({ error: "الباسورد لازم يكون 6 حروف أو أرقام على الأقل" });
 
     const created = await Staff.create({
       name,
@@ -369,13 +363,7 @@ app.post("/api/staff", requireAuth, requireAdmin, async (req, res) => {
       role: "cashier"
     });
 
-    res.status(201).json({
-      _id: created._id,
-      name: created.name,
-      username: created.username,
-      role: created.role,
-      active: created.active
-    });
+    res.status(201).json({ _id: created._id, name: created.name, username: created.username, role: created.role, active: created.active });
   } catch (err) {
     if (err.code === 11000) return res.status(400).json({ error: "اليوزر ده موجود قبل كده" });
     res.status(500).json({ error: err.message });
@@ -384,25 +372,17 @@ app.post("/api/staff", requireAuth, requireAdmin, async (req, res) => {
 
 app.put("/api/staff/:id", requireAuth, requireAdmin, async (req, res) => {
   try {
-    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
-      return res.status(400).json({ error: "رقم الحساب غير صحيح" });
-    }
-
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "رقم الحساب غير صحيح" });
     const update = {};
     if (req.body?.password !== undefined) {
       const password = String(req.body.password);
-      if (password.length < 6 || password.length > 100) {
-        return res.status(400).json({ error: "الباسورد لازم يكون 6 حروف أو أرقام على الأقل" });
-      }
+      if (password.length < 6 || password.length > 100) return res.status(400).json({ error: "الباسورد لازم يكون 6 حروف على الأقل" });
       update.password = await hashPassword(password);
     }
     if (typeof req.body?.active === "boolean") update.active = req.body.active;
     if (req.body?.name) update.name = String(req.body.name).trim().slice(0, 50);
 
-    const updated = await Staff
-      .findOneAndUpdate({ _id: req.params.id, role: "cashier" }, update, { new: true })
-      .select("-password");
-
+    const updated = await Staff.findOneAndUpdate({ _id: req.params.id, role: "cashier" }, update, { new: true }).select("-password");
     if (!updated) return res.status(404).json({ error: "الحساب غير موجود" });
     res.json(updated);
   } catch (err) {
@@ -412,9 +392,7 @@ app.put("/api/staff/:id", requireAuth, requireAdmin, async (req, res) => {
 
 app.delete("/api/staff/:id", requireAuth, requireAdmin, async (req, res) => {
   try {
-    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
-      return res.status(400).json({ error: "رقم الحساب غير صحيح" });
-    }
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ error: "رقم الحساب غير صحيح" });
     await Staff.findOneAndDelete({ _id: req.params.id, role: "cashier" });
     res.json({ message: "تم المسح" });
   } catch (err) {
@@ -423,7 +401,7 @@ app.delete("/api/staff/:id", requireAuth, requireAdmin, async (req, res) => {
 });
 
 // =========================
-// SETTINGS (القراءة للكل - التعديل للأدمن فقط)
+// SETTINGS
 // =========================
 app.get("/api/settings", async (req, res) => {
   try {
@@ -438,15 +416,8 @@ app.get("/api/settings", async (req, res) => {
 app.put("/api/settings", requireAuth, requireAdmin, async (req, res) => {
   try {
     let settings = await Settings.findOne();
-    if (!settings) {
-      settings = new Settings(req.body);
-    } else {
-      settings.heroImage = req.body.heroImage || settings.heroImage;
-      settings.heroTitleAr = req.body.heroTitleAr || settings.heroTitleAr;
-      settings.heroTitleEn = req.body.heroTitleEn || settings.heroTitleEn;
-      settings.logoImage = req.body.logoImage !== undefined ? req.body.logoImage : settings.logoImage;
-      settings.promoBannerImage = req.body.promoBannerImage !== undefined ? req.body.promoBannerImage : settings.promoBannerImage;
-    }
+    if (!settings) settings = new Settings(req.body);
+    else Object.assign(settings, req.body);
     await settings.save();
     res.json(settings);
   } catch (err) {
@@ -455,7 +426,7 @@ app.put("/api/settings", requireAuth, requireAdmin, async (req, res) => {
 });
 
 // =========================
-// DELIVERY ZONES (القراءة للكل - التعديل للأدمن فقط)
+// DELIVERY ZONES
 // =========================
 app.get("/api/zones", async (req, res) => {
   try {
@@ -484,7 +455,7 @@ app.delete("/api/zones/:id", requireAuth, requireAdmin, async (req, res) => {
 });
 
 // =========================
-// CATEGORIES (القراءة للكل - التعديل للأدمن فقط)
+// CATEGORIES
 // =========================
 app.get("/api/categories", async (req, res) => {
   try {
@@ -523,7 +494,7 @@ app.delete("/api/categories/:id", requireAuth, requireAdmin, async (req, res) =>
 });
 
 // =========================
-// ITEMS (القراءة للكل - التعديل للأدمن فقط)
+// ITEMS
 // =========================
 app.get("/api/items", async (req, res) => {
   try {
@@ -536,26 +507,9 @@ app.get("/api/items", async (req, res) => {
 app.post("/api/items", requireAuth, requireAdmin, async (req, res) => {
   try {
     const count = await Item.countDocuments({ category: req.body.category });
-    const newItem = new Item({
-      name: req.body.name,
-      price: Number(req.body.price),
-      discount: Number(req.body.discount) || 0,
-      image: req.body.image || "https://via.placeholder.com/400x300/222/FFD700?text=Bahbah+Burger",
-      description: req.body.description,
-      extras: req.body.extras,
-      category: req.body.category,
-      type: req.body.type || "normal",
-      maxItems: req.body.maxItems ? Number(req.body.maxItems) : undefined,
-      isOffer: Boolean(req.body.isOffer),
-      order: count,
-      addons: req.body.addons || [],
-      boxItems: req.body.boxItems || [],
-      sizes: req.body.sizes || [],
-      modifierGroups: req.body.modifierGroups || []
-    });
+    const newItem = new Item({ ...req.body, order: count });
     res.json(await newItem.save());
   } catch (err) {
-    console.error("❌ Create item error:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -564,9 +518,7 @@ app.put("/api/items/:id", requireAuth, requireAdmin, async (req, res) => {
   try {
     const updateData = { ...req.body };
     delete updateData._id;
-    delete updateData.available; // التوفر بيتغير من الراوت المخصوص له بس
-
-    // السعر والخصم بيتحدثوا بس لو اتبعتوا (عشان تحريك الترتيب مايصفّرش الخصم)
+    delete updateData.available;
     if (req.body.price !== undefined) updateData.price = Number(req.body.price);
     else delete updateData.price;
     if (req.body.discount !== undefined) updateData.discount = Number(req.body.discount) || 0;
@@ -576,22 +528,14 @@ app.put("/api/items/:id", requireAuth, requireAdmin, async (req, res) => {
     if (!updated) return res.status(404).json({ error: "الصنف غير موجود" });
     res.json(updated);
   } catch (err) {
-    console.error("❌ Update item error:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// تشغيل/إيقاف صنف (متاح / خلص) — مسموح للكاشير والأدمن
 app.put("/api/items/:id/availability", requireAuth, async (req, res) => {
   try {
-    if (typeof req.body.available !== "boolean") {
-      return res.status(400).json({ error: "القيمة غير صحيحة" });
-    }
-    const updated = await Item.findByIdAndUpdate(
-      req.params.id,
-      { $set: { available: req.body.available } },
-      { new: true }
-    );
+    if (typeof req.body.available !== "boolean") return res.status(400).json({ error: "القيمة غير صحيحة" });
+    const updated = await Item.findByIdAndUpdate(req.params.id, { $set: { available: req.body.available } }, { new: true });
     if (!updated) return res.status(404).json({ error: "الصنف غير موجود" });
     res.json({ _id: updated._id, name: updated.name, available: updated.available });
   } catch (err) {
@@ -612,14 +556,12 @@ app.delete("/api/items/:id", requireAuth, requireAdmin, async (req, res) => {
 // ORDERS
 // =========================
 const cleanText = (value, max) => String(value ?? "").trim().slice(0, max);
-
 const clampNumber = (value, min, max) => {
   const n = Number(value);
   if (!Number.isFinite(n)) return min;
   return Math.min(Math.max(n, min), max);
 };
 
-// بنبني الأوردر بأنفسنا من الحقول المسموحة بس
 const buildOrderFromBody = (body = {}, zoneFee = null) => {
   const orderId = cleanText(body.orderId, 30);
   if (!/^[A-Za-z0-9-]{4,30}$/.test(orderId)) return { error: "رقم الأوردر غير صحيح" };
@@ -634,53 +576,36 @@ const buildOrderFromBody = (body = {}, zoneFee = null) => {
   if (!orderType) return { error: "نوع الاستلام غير صحيح" };
 
   const rawItems = Array.isArray(body.items) ? body.items.slice(0, 60) : [];
-  const items = rawItems
-    .map((it) => ({
-      name: cleanText(it?.name, 200),
-      price: clampNumber(it?.price, 0, 100000),
-      quantity: Math.round(clampNumber(it?.quantity, 1, 99)),
-      // تعديلات الصنف (Modifiers) والملاحظات
-      modifiers: Array.isArray(it?.modifiers)
-        ? it.modifiers.slice(0, 40).map((m) => cleanText(m, 200)).filter(Boolean)
-        : [],
-      notes: cleanText(it?.notes, 300)
-    }))
-    .filter((it) => it.name);
+  const items = rawItems.map((it) => ({
+    name: cleanText(it?.name, 200),
+    price: clampNumber(it?.price, 0, 100000),
+    quantity: Math.round(clampNumber(it?.quantity, 1, 99)),
+    modifiers: Array.isArray(it?.modifiers) ? it.modifiers.slice(0, 40).map((m) => cleanText(m, 200)).filter(Boolean) : [],
+    notes: cleanText(it?.notes, 300)
+  })).filter((it) => it.name);
   if (items.length === 0) return { error: "الأوردر فاضي" };
 
   const itemsTotal = items.reduce((sum, it) => sum + it.price * it.quantity, 0);
-  const deliveryFee = orderType === "delivery"
-    ? (zoneFee !== null ? zoneFee : clampNumber(body.deliveryFee, 0, 500))
-    : 0;
+  const deliveryFee = orderType === "delivery" ? (zoneFee !== null ? zoneFee : clampNumber(body.deliveryFee, 0, 500)) : 0;
 
   return {
     order: {
-      orderId,
-      customerName,
-      customerPhone,
-      orderType,
+      orderId, customerName, customerPhone, orderType,
       customerAddress: orderType === "delivery" ? cleanText(body.customerAddress, 300) : "استلام من الفرع",
       zoneName: orderType === "delivery" ? cleanText(body.zoneName, 80) : "استلام من الفرع",
-      deliveryFee,
-      items,
-      itemsTotal,
-      grandTotal: itemsTotal + deliveryFee,
-      status: "pending"
+      deliveryFee, items, itemsTotal, grandTotal: itemsTotal + deliveryFee, status: "pending"
     }
   };
 };
 
-// الزبون يبعت أوردر (من غير تسجيل دخول) — بس بحد أقصى للتكرار
 app.post("/api/orders", orderLimiter, async (req, res) => {
   try {
     const body = req.body || {};
-
     let zoneFee = null;
     if (body.orderType === "delivery") {
       const zone = await DeliveryZone.findOne({ name: cleanText(body.zoneName, 80) });
       if (zone) zoneFee = zone.fee;
     }
-
     const { order, error } = buildOrderFromBody(body, zoneFee);
     if (error) return res.status(400).json({ error });
 
@@ -689,12 +614,10 @@ app.post("/api/orders", orderLimiter, async (req, res) => {
     res.status(201).json({ ok: true, orderId: saved.orderId });
   } catch (err) {
     if (err.code === 11000) return res.status(409).json({ error: "الأوردر ده اتبعت قبل كده" });
-    console.error("❌ Save order error:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// الأوردرات (للكاشير والأدمن)
 app.get("/api/orders", requireAuth, async (req, res) => {
   try {
     res.json(await Order.find().sort({ createdAt: -1 }));
@@ -705,23 +628,11 @@ app.get("/api/orders", requireAuth, async (req, res) => {
 
 app.put("/api/orders/:id", requireAuth, async (req, res) => {
   try {
-    if (!req.body.status || !["pending", "accepted", "completed"].includes(req.body.status)) {
-      return res.status(400).json({ error: "حالة الأوردر غير صحيحة" });
-    }
-
-    const query = mongoose.Types.ObjectId.isValid(req.params.id)
-      ? { $or: [{ _id: req.params.id }, { orderId: req.params.id }] }
-      : { orderId: req.params.id };
-
+    if (!req.body.status || !["pending", "accepted", "completed"].includes(req.body.status)) return res.status(400).json({ error: "حالة الأوردر غير صحيحة" });
+    const query = mongoose.Types.ObjectId.isValid(req.params.id) ? { $or: [{ _id: req.params.id }, { orderId: req.params.id }] } : { orderId: req.params.id };
     const update = { status: req.body.status };
-    if (req.body.status === "accepted") {
-      update.acceptedBy = req.user.name;
-      update.acceptedAt = new Date();
-    }
-    if (req.body.status === "completed") {
-      update.completedBy = req.user.name;
-      update.completedAt = new Date();
-    }
+    if (req.body.status === "accepted") { update.acceptedBy = req.user.name; update.acceptedAt = new Date(); }
+    if (req.body.status === "completed") { update.completedBy = req.user.name; update.completedAt = new Date(); }
 
     const updatedOrder = await Order.findOneAndUpdate(query, update, { new: true });
     if (!updatedOrder) return res.status(404).json({ error: "الأوردر غير موجود" });
@@ -740,7 +651,9 @@ app.delete("/api/orders/:id", requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
-// تقفيل الشيفت
+// =========================
+// SHIFTS
+// =========================
 app.get("/api/shifts", requireAuth, async (req, res) => {
   try {
     res.json(await Shift.find().sort({ closedAt: -1 }).limit(90));
@@ -763,9 +676,7 @@ app.post("/api/shifts/close", requireAuth, async (req, res) => {
       })
       .sort((a, b) => new Date(a.completedAt || a.createdAt) - new Date(b.completedAt || b.createdAt));
 
-    if (inShift.length === 0) {
-      return res.status(400).json({ error: "مفيش أوردرات مكتملة في الشيفت ده" });
-    }
+    if (inShift.length === 0) return res.status(400).json({ error: "مفيش أوردرات مكتملة في الشيفت ده" });
 
     const shift = await Shift.create({
       closedAt: now,
@@ -782,45 +693,31 @@ app.post("/api/shifts/close", requireAuth, async (req, res) => {
   }
 });
 
-// فحص سريع: افتح /api/health
 app.get("/api/health", (req, res) => {
   const dbOk = mongoose.connection.readyState === 1;
   res.status(dbOk ? 200 : 503).json({
-    ok: dbOk,
-    database: dbOk ? "connected" : "disconnected",
-    auth: authReady ? "ready" : "not-configured"
+    ok: dbOk, database: dbOk ? "connected" : "disconnected", auth: authReady ? "ready" : "not-configured"
   });
 });
 
 // =========================
-// SERVER + DATABASE STARTUP
+// SERVER STARTUP
 // =========================
 const PORT = process.env.PORT || 5000;
 const MONGO_URI = process.env.MONGO_URI;
 
-process.on("unhandledRejection", (err) => {
-  console.error("⚠️ unhandledRejection:", err);
-});
+process.on("unhandledRejection", (err) => console.error("⚠️ unhandledRejection:", err));
+mongoose.connection.on("disconnected", () => console.error("❌ اتصال MongoDB انقطع"));
+mongoose.connection.on("error", (err) => console.error("❌ MongoDB error:", err.message));
 
-mongoose.connection.on("disconnected", () => {
-  console.error("❌ اتصال MongoDB انقطع (Mongoose هيحاول يرجّعه لوحده)");
-});
-mongoose.connection.on("error", (err) => {
-  console.error("❌ MongoDB error:", err.message);
-});
-
-// مسح أي حسابات "أدمن" قديمة من الداتابيز (الأدمن دلوقتي بياخد الباسورد من ADMIN_PASSWORD بس)
 const removeLegacyAdminAccounts = async () => {
   try {
     const result = await Staff.deleteMany({ role: "admin" });
     if (result.deletedCount > 0) console.log(`🧹 اتمسح ${result.deletedCount} حساب أدمن قديم`);
-  } catch (err) {
-    console.error("⚠️ ماقدرتش أنضف حسابات الأدمن القديمة:", err.message);
-  }
+  } catch (err) {}
 };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
 const connectToDatabase = async () => {
   while (true) {
     try {
@@ -843,5 +740,4 @@ if (!MONGO_URI) {
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`🚀 السيرفر شغال على البورت ${PORT}`);
 });
-
 connectToDatabase();
