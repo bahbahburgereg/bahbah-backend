@@ -30,6 +30,18 @@ app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ limit: "50mb", extended: true }));
 
 // =========================
+// كاش في الذاكرة لقائمة الأصناف والإعدادات (بيتمسح لوحده أول ما الأدمن يعدّل أي حاجة)
+// =========================
+const LIST_CACHE_TTL = 30 * 1000;
+const listCache = { items: null, settings: null };
+const readListCache = (key) => (listCache[key] && Date.now() - listCache[key].at < LIST_CACHE_TTL ? listCache[key].body : null);
+const writeListCache = (key, body) => { listCache[key] = { at: Date.now(), body }; };
+app.use(["/api/items", "/api/settings"], (req, res, next) => {
+  if (req.method !== "GET") res.on("finish", () => { listCache.items = null; listCache.settings = null; });
+  next();
+});
+
+// =========================
 // Category Schema
 // =========================
 const categorySchema = new mongoose.Schema({
@@ -437,9 +449,13 @@ const presentSettings = (doc) => {
 
 app.get("/api/settings", async (req, res) => {
   try {
+    const cached = readListCache("settings");
+    if (cached) return res.type("json").send(cached);
     let settings = await Settings.findOne();
     if (!settings) settings = await Settings.create({});
-    res.json(presentSettings(settings));
+    const body = JSON.stringify(presentSettings(settings));
+    writeListCache("settings", body);
+    res.type("json").send(body);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -562,6 +578,8 @@ const sendImageFromDataUri = (res, dataUri) => {
 
 app.get("/api/items", async (req, res) => {
   try {
+    const cached = readListCache("items");
+    if (cached) return res.type("json").send(cached);
     // الصور بتتشال جوه MongoDB نفسه (من غير ما تتنقل للسيرفر) ونسيب مكانها لينك
     const docs = await Item.aggregate([
       { $sort: { order: 1, _id: 1 } },
@@ -573,13 +591,15 @@ app.get("/api/items", async (req, res) => {
       },
       { $addFields: { image: { $cond: ["$_isData", "", "$image"] } } }
     ]);
-    res.json(docs.map((d) => {
+    const body = JSON.stringify(docs.map((d) => {
       const out = { ...d };
       if (d._isData) out.image = `${PUBLIC_URL}/api/items/${d._id}/image?v=${d._imgLen}`;
       if (out.available === undefined) out.available = true;
       delete out._imgLen; delete out._isData;
       return out;
     }));
+    writeListCache("items", body);
+    res.type("json").send(body);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
