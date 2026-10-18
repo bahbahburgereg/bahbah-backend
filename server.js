@@ -426,23 +426,46 @@ app.delete("/api/staff/:id", requireAuth, requireAdmin, async (req, res) => {
 // =========================
 // SETTINGS
 // =========================
+const SETTINGS_IMAGE_FIELDS = { hero: "heroImage", logo: "logoImage", banner: "promoBannerImage" };
+const presentSettings = (doc) => {
+  const d = doc && typeof doc.toObject === "function" ? doc.toObject() : { ...doc };
+  Object.entries(SETTINGS_IMAGE_FIELDS).forEach(([key, field]) => {
+    if (typeof d[field] === "string" && d[field].startsWith("data:")) d[field] = `${PUBLIC_URL}/api/settings/image/${key}?v=${d[field].length}`;
+  });
+  return d;
+};
+
 app.get("/api/settings", async (req, res) => {
   try {
     let settings = await Settings.findOne();
     if (!settings) settings = await Settings.create({});
-    res.json(settings);
+    res.json(presentSettings(settings));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
+app.get("/api/settings/image/:key", async (req, res) => {
+  try {
+    const field = SETTINGS_IMAGE_FIELDS[req.params.key];
+    if (!field) return res.status(404).end();
+    const settings = await Settings.findOne().lean();
+    if (!settings) return res.status(404).end();
+    sendImageFromDataUri(res, settings[field]);
+  } catch (err) {
+    res.status(500).end();
+  }
+});
+
 app.put("/api/settings", requireAuth, requireAdmin, async (req, res) => {
   try {
+    const body = { ...req.body };
+    Object.values(SETTINGS_IMAGE_FIELDS).forEach((f) => { if (isOwnImageUrl(body[f])) delete body[f]; });
     let settings = await Settings.findOne();
-    if (!settings) settings = new Settings(req.body);
-    else Object.assign(settings, req.body);
+    if (!settings) settings = new Settings(body);
+    else Object.assign(settings, body);
     await settings.save();
-    res.json(settings);
+    res.json(presentSettings(settings));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -519,11 +542,57 @@ app.delete("/api/categories/:id", requireAuth, requireAdmin, async (req, res) =>
 // =========================
 // ITEMS
 // =========================
+// ---- الصور: بدل ما نبعت الصور (base64) جوه رد الأصناف، بنبعت لينك صغير والمتصفح يحمّل الصورة لوحدها ويخزّنها ----
+const PUBLIC_URL = (process.env.PUBLIC_URL || "https://bahbah-backend-production.up.railway.app").replace(/\/$/, "");
+const DATA_URI_RE = /^data:(image\/[a-z0-9.+-]+);base64,([\s\S]+)$/i;
+// لينك صورة بتاعنا (لو الأدمن رجّعه في التعديل، ما نحفظوش مكان الصورة الأصلية)
+const isOwnImageUrl = (v) => typeof v === "string" && v.startsWith(`${PUBLIC_URL}/api/`) && v.includes("/image");
+const presentItem = (doc) => {
+  const d = doc && typeof doc.toObject === "function" ? doc.toObject() : { ...doc };
+  if (typeof d.image === "string" && d.image.startsWith("data:")) d.image = `${PUBLIC_URL}/api/items/${d._id}/image?v=${d.image.length}`;
+  return d;
+};
+const sendImageFromDataUri = (res, dataUri) => {
+  const m = DATA_URI_RE.exec(dataUri || "");
+  if (!m) return res.status(404).end();
+  const buf = Buffer.from(m[2], "base64");
+  res.set({ "Content-Type": m[1], "Content-Length": buf.length, "Cache-Control": "public, max-age=31536000, immutable" });
+  res.send(buf);
+};
+
 app.get("/api/items", async (req, res) => {
   try {
-    res.json(await Item.find().sort({ order: 1, _id: 1 }));
+    // الصور بتتشال جوه MongoDB نفسه (من غير ما تتنقل للسيرفر) ونسيب مكانها لينك
+    const docs = await Item.aggregate([
+      { $sort: { order: 1, _id: 1 } },
+      {
+        $addFields: {
+          _imgLen: { $strLenCP: { $ifNull: ["$image", ""] } },
+          _isData: { $eq: [{ $substrCP: [{ $ifNull: ["$image", ""] }, 0, 5] }, "data:"] }
+        }
+      },
+      { $addFields: { image: { $cond: ["$_isData", "", "$image"] } } }
+    ]);
+    res.json(docs.map((d) => {
+      const out = { ...d };
+      if (d._isData) out.image = `${PUBLIC_URL}/api/items/${d._id}/image?v=${d._imgLen}`;
+      if (out.available === undefined) out.available = true;
+      delete out._imgLen; delete out._isData;
+      return out;
+    }));
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+app.get("/api/items/:id/image", async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(404).end();
+    const item = await Item.findById(req.params.id).select("image").lean();
+    if (!item) return res.status(404).end();
+    sendImageFromDataUri(res, item.image);
+  } catch (err) {
+    res.status(500).end();
   }
 });
 
@@ -561,6 +630,7 @@ app.put("/api/items/:id", requireAuth, requireAdmin, async (req, res) => {
     const updateData = { ...req.body };
     delete updateData._id;
     delete updateData.available;
+    if (isOwnImageUrl(updateData.image)) delete updateData.image;
     if (req.body.price !== undefined) updateData.price = Number(req.body.price);
     else delete updateData.price;
     if (req.body.discount !== undefined) updateData.discount = Number(req.body.discount) || 0;
@@ -568,7 +638,7 @@ app.put("/api/items/:id", requireAuth, requireAdmin, async (req, res) => {
 
     const updated = await Item.findByIdAndUpdate(req.params.id, { $set: updateData }, { new: true, runValidators: true });
     if (!updated) return res.status(404).json({ error: "الصنف غير موجود" });
-    res.json(updated);
+    res.json(presentItem(updated));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
