@@ -514,6 +514,25 @@ app.post("/api/items", requireAuth, requireAdmin, async (req, res) => {
   }
 });
 
+// تعديل الخصم لأكتر من صنف مرة واحدة (للأدمن) — لازم يكون قبل راوت /api/items/:id
+app.put("/api/items/bulk-discount", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const discount = Number(req.body?.discount);
+    if (!Number.isFinite(discount) || discount < 0 || discount > 100) {
+      return res.status(400).json({ error: "الخصم لازم يكون رقم من 0 لـ 100" });
+    }
+    const ids = Array.isArray(req.body?.ids)
+      ? req.body.ids.filter((id) => mongoose.Types.ObjectId.isValid(id))
+      : [];
+    if (ids.length === 0) return res.status(400).json({ error: "اختار صنف واحد على الأقل" });
+
+    const result = await Item.updateMany({ _id: { $in: ids } }, { $set: { discount } });
+    res.json({ ok: true, matched: result.matchedCount, modified: result.modifiedCount });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.put("/api/items/:id", requireAuth, requireAdmin, async (req, res) => {
   try {
     const updateData = { ...req.body };

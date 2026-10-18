@@ -88,7 +88,6 @@ const HomePage = ({ lang, siteSettings, menuItems, handleOpenItemDetails, cart, 
 
   return (
     <div className="bg-[#12080A] min-h-screen text-white">
-      {/* هيدر العروض الكبرى والفخم مع بانر الخصم التحتاوي */}
       <header className="relative w-full bg-[#12080A] flex flex-col items-center justify-center overflow-hidden border-b-4 border-[#800020] shadow-2xl pt-12 pb-8">
         <div 
           className="absolute inset-0 bg-cover bg-center opacity-70 scale-105 transition duration-700"
@@ -96,7 +95,6 @@ const HomePage = ({ lang, siteSettings, menuItems, handleOpenItemDetails, cart, 
         ></div>
         <div className="absolute inset-0 bg-gradient-to-t from-[#12080A] via-[#12080A]/60 to-transparent"></div>
         
-        {/* محتوى الهيدر الأساسي */}
         <div className="relative z-10 text-center px-4 mb-6">
           <h1 className="text-4xl md:text-6xl font-black text-transparent bg-clip-text bg-gradient-to-r from-[#FFD700] via-[#E6C687] to-[#C5A059] drop-shadow-[0_5px_5px_rgba(0,0,0,0.9)] mb-4">
             {title}
@@ -106,7 +104,6 @@ const HomePage = ({ lang, siteSettings, menuItems, handleOpenItemDetails, cart, 
           </Link>
         </div>
 
-        {/* صورة الخصم أو البانر الإضافي تحت زرار اطلب دلوقتي (تظهر فقط لو مضافة) */}
         {siteSettings.promoBannerImage && (
           <div className="relative z-10 w-full max-w-4xl px-4 mt-6">
             <div className="rounded-2xl overflow-hidden border-2 border-[#FFD700]/60 shadow-[0_0_25px_rgba(255,215,0,0.3)] bg-[#1C0D10]">
@@ -135,8 +132,8 @@ const HomePage = ({ lang, siteSettings, menuItems, handleOpenItemDetails, cart, 
 
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6 transition-all duration-300">
               {offerItems.slice(currentIndex, currentIndex + 3).map((item) => {
-                const cartItem = cart.find(i => i.name === item.name);
-                const quantity = cartItem ? cart.filter(i => i.name === item.name).length : 0;
+                const quantity = cart.filter(i => i._id === item._id).length;
+                const hasMods = (item.sizes && item.sizes.length > 0) || (item.addons && item.addons.length > 0);
 
                 return (
                   <div 
@@ -152,18 +149,32 @@ const HomePage = ({ lang, siteSettings, menuItems, handleOpenItemDetails, cart, 
                         <span className="text-[#FFD700] font-black">{item.price} ج</span>
                       </div>
                       
-                      {quantity === 0 ? (
-                        <button onClick={() => handleOpenItemDetails(item)} className="bg-[#800020] text-white px-4 py-2 rounded-xl font-bold text-sm shadow hover:bg-[#990026] transition">
+                      {item.type === 'box' ? (
+                        <button onClick={() => handleOpenItemDetails(item)} className="bg-[#800020] text-white px-4 py-2 rounded-xl font-bold text-sm shadow hover:bg-[#990026] transition shrink-0">
+                          {t.customizeBox}
+                        </button>
+                      ) : hasMods ? (
+                        <button onClick={() => handleOpenItemDetails(item)} className="bg-[#800020] text-[#FFD700] px-3 py-2 rounded-xl font-bold text-sm shadow hover:bg-[#990026] hover:text-white transition shrink-0">
+                          {quantity > 0 ? `في السلة (${quantity}) +` : `${t.details} 🛒`}
+                        </button>
+                      ) : quantity === 0 ? (
+                        <button onClick={() => {
+                          const basePrice = item.price > 0 ? item.price : 0;
+                          setCart([...cart, { ...item, price: basePrice }]);
+                        }} className="bg-[#800020] text-white px-4 py-2 rounded-xl font-bold text-sm shadow hover:bg-[#990026] transition shrink-0">
                           أضف للسلة 🛒
                         </button>
                       ) : (
-                        <div className="flex items-center bg-[#12080A] border border-[#800020] rounded-xl px-2 py-1 gap-2">
+                        <div className="flex items-center bg-[#12080A] border border-[#800020] rounded-xl px-2 py-1 gap-2 shrink-0">
                           <button onClick={() => {
-                            const idx = cart.findIndex(i => i.name === item.name);
+                            const idx = cart.findLastIndex(i => i._id === item._id);
                             if (idx !== -1) { const nc = [...cart]; nc.splice(idx, 1); setCart(nc); }
                           }} className="text-[#FFD700] font-black px-2 hover:text-white">-</button>
                           <span className="font-black text-white">{quantity}</span>
-                          <button onClick={() => setCart([...cart, item])} className="text-[#FFD700] font-black px-2 hover:text-white">+</button>
+                          <button onClick={() => {
+                            const basePrice = item.price > 0 ? item.price : 0;
+                            setCart([...cart, { ...item, price: basePrice }]);
+                          }} className="text-[#FFD700] font-black px-2 hover:text-white">+</button>
                         </div>
                       )}
                     </div>
@@ -243,8 +254,8 @@ const MenuPage = ({ menuItems, categories, lang, handleOpenBox, handleOpenItemDe
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-8">
                   {catItems.map(item => {
-                    const cartItem = cart.find(i => i.name === item.name);
-                    const quantity = cartItem ? cart.filter(i => i.name === item.name).length : 0;
+                    const quantity = cart.filter(i => i._id === item._id).length;
+                    const hasMods = (item.sizes && item.sizes.length > 0) || (item.addons && item.addons.length > 0);
 
                     return (
                       <div 
@@ -263,24 +274,32 @@ const MenuPage = ({ menuItems, categories, lang, handleOpenBox, handleOpenItemDe
                             <button onClick={() => handleOpenBox(item)} className="w-full bg-[#800020] text-white font-bold py-2.5 rounded-xl hover:bg-[#990026] transition shadow">
                               {t.customizeBox}
                             </button>
+                          ) : hasMods ? (
+                            <button onClick={() => handleOpenItemDetails(item)} className="w-full bg-[#800020] text-[#FFD700] font-bold py-2.5 rounded-xl hover:bg-[#990026] hover:text-white transition shadow">
+                              {quantity > 0 ? `في السلة (${quantity}) +` : `${t.details} 🛒`}
+                            </button>
+                          ) : quantity === 0 ? (
+                            <button onClick={() => {
+                              const basePrice = item.price > 0 ? item.price : 0;
+                              setCart([...cart, { ...item, price: basePrice }]);
+                            }} className="w-full border-2 border-[#800020] text-[#FFD700] font-bold py-2.5 rounded-xl hover:bg-[#800020] hover:text-white transition shadow">
+                              أضف للسلة 🛒
+                            </button>
                           ) : (
-                            quantity === 0 ? (
-                              <button onClick={() => handleOpenItemDetails(item)} className="w-full border-2 border-[#800020] text-[#FFD700] font-bold py-2.5 rounded-xl hover:bg-[#800020] hover:text-white transition shadow">
-                                {t.details} 🛒
-                              </button>
-                            ) : (
-                              <div className="flex items-center justify-between bg-[#12080A] border border-[#800020] rounded-xl px-3 py-2">
-                                <span className="text-xs text-[#FFD700] font-bold">الكمية:</span>
-                                <div className="flex items-center gap-3">
-                                  <button onClick={() => {
-                                    const idx = cart.findIndex(i => i.name === item.name);
-                                    if (idx !== -1) { const nc = [...cart]; nc.splice(idx, 1); setCart(nc); }
-                                  }} className="w-7 h-7 bg-[#1C0D10] rounded-lg text-[#FFD700] font-black hover:bg-[#800020] hover:text-white">-</button>
-                                  <span className="font-black text-white">{quantity}</span>
-                                  <button onClick={() => setCart([...cart, item])} className="w-7 h-7 bg-[#1C0D10] rounded-lg text-[#FFD700] font-black hover:bg-[#800020] hover:text-white">+</button>
-                                </div>
+                            <div className="flex items-center justify-between bg-[#12080A] border border-[#800020] rounded-xl px-3 py-2">
+                              <span className="text-xs text-[#FFD700] font-bold">الكمية:</span>
+                              <div className="flex items-center gap-3">
+                                <button onClick={() => {
+                                  const idx = cart.findLastIndex(i => i._id === item._id);
+                                  if (idx !== -1) { const nc = [...cart]; nc.splice(idx, 1); setCart(nc); }
+                                }} className="w-7 h-7 bg-[#1C0D10] rounded-lg text-[#FFD700] font-black hover:bg-[#800020] hover:text-white">-</button>
+                                <span className="font-black text-white">{quantity}</span>
+                                <button onClick={() => {
+                                  const basePrice = item.price > 0 ? item.price : 0;
+                                  setCart([...cart, { ...item, price: basePrice }]);
+                                }} className="w-7 h-7 bg-[#1C0D10] rounded-lg text-[#FFD700] font-black hover:bg-[#800020] hover:text-white">+</button>
                               </div>
-                            )
+                            </div>
                           )}
                         </div>
                       </div>
@@ -311,14 +330,13 @@ const AdminDashboard = ({ menuItems, categories, siteSettings, lang, fetchItems,
   const [titleEn, setTitleEn] = useState(siteSettings.heroTitleEn);
   const [logoImg, setLogoImg] = useState(siteSettings.logoImage || '');
 
-  // مناطق التوصيل
   const [deliveryZones, setDeliveryZones] = useState([]);
   const [zoneName, setZoneName] = useState('');
   const [zoneFee, setZoneFee] = useState('');
 
   const fetchZones = async () => {
     try {
-const res = await fetch('https://bahbah-burger-production-d57f.up.railway.app/api/zones');
+      const res = await fetch('https://bahbah-burger-production-d57f.up.railway.app/api/zones');
       const data = await res.json();
       setDeliveryZones(data);
     } catch (err) {}
@@ -668,7 +686,6 @@ const res = await fetch('https://bahbah-burger-production-d57f.up.railway.app/ap
         <Link className="text-zinc-400 hover:text-white underline" to="/menu">{t.menu}</Link>
       </div>
 
-      {/* قسم إدارة مناطق التوصيل */}
       <div className="bg-[#1C0D10] p-6 rounded-2xl border border-[#800020]/60 mb-8 shadow-xl">
         <h3 className="text-xl font-bold text-[#FFD700] mb-4">🚚 إدارة مناطق التوصيل وأسعارها</h3>
         <form onSubmit={handleAddZone} className="flex flex-col md:flex-row gap-4 mb-6">
@@ -746,7 +763,6 @@ const res = await fetch('https://bahbah-burger-production-d57f.up.railway.app/ap
         </button>
       </form>
 
-      {/* إدارة الأقسام */}
       <div className="bg-[#1C0D10] p-6 rounded-2xl border border-[#3A1218] mb-8 shadow-xl">
         <h3 className="text-xl font-bold text-[#FFD700] mb-4">{t.catManage}</h3>
         <form onSubmit={handleSaveCategory} className="flex gap-4 mb-6">
@@ -799,7 +815,6 @@ const res = await fetch('https://bahbah-burger-production-d57f.up.railway.app/ap
         </div>
       </div>
       
-      {/* نموذج إضافة وتعديل صنف */}
       <form onSubmit={handleSaveItem} className="bg-[#1C0D10] p-6 rounded-2xl border border-[#3A1218] mb-8 grid grid-cols-1 md:grid-cols-2 gap-4 shadow-xl">
         <h3 className="md:col-span-2 text-xl font-bold text-[#FFD700] mb-2">{t.itemManage}</h3>
         <div>
@@ -880,7 +895,6 @@ const res = await fetch('https://bahbah-burger-production-d57f.up.railway.app/ap
           </div>
         )}
 
-        {/* الأحجام والأسعار */}
         <div className="md:col-span-2 bg-[#12080A] p-4 rounded-xl border border-[#800020]/50">
           <label className="block text-sm mb-2 text-[#FFD700] font-bold">⚖️ أحجام الصنف وأسعارها (مثل: كيلو، نص، ربع)</label>
           <div className="flex gap-2 mb-3">
@@ -915,7 +929,6 @@ const res = await fetch('https://bahbah-burger-production-d57f.up.railway.app/ap
           )}
         </div>
 
-        {/* الإضافات الاختيارية */}
         <div className="md:col-span-2 bg-[#12080A] p-4 rounded-xl border border-[#3A1218]">
           <label className="block text-sm mb-2 text-[#FFD700] font-bold">✨ الإضافات الاختيارية</label>
           <div className="flex gap-2 mb-3">
@@ -967,7 +980,6 @@ const res = await fetch('https://bahbah-burger-production-d57f.up.railway.app/ap
         </div>
       </form>
 
-      {/* عرض الأصناف مقسمة حسب الأقسام في لوحة التحكم */}
       <div className="space-y-10 mt-10">
         <h3 className="text-2xl font-bold text-[#FFD700] border-b border-[#3A1218] pb-3">📋 إدارة وترتيب الأصناف حسب الأقسام</h3>
         
@@ -1329,7 +1341,8 @@ function App() {
       setSelectedSize(hasSizes ? item.sizes[0] : null);
       setSelectedAddon(null);
     } else {
-      setCart([...cart, item]);
+      const basePrice = item.price > 0 ? item.price : 0;
+      setCart([...cart, { ...item, price: basePrice }]);
     }
   };
 
@@ -1409,7 +1422,6 @@ function App() {
         </div>
       )}
 
-      {/* مودال البوكسات */}
       {isBoxModalOpen && activeBox && (
         <div className="fixed inset-0 bg-black/90 flex items-center justify-center z-50 p-4">
           <div className="bg-[#1C0D10] border border-[#800020] rounded-2xl w-full max-w-lg p-6 relative shadow-2xl">
