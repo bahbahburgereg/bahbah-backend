@@ -115,9 +115,28 @@ const orderSchema = new mongoose.Schema({
   acceptedBy: { type: String },
   acceptedAt: { type: Date },
   completedBy: { type: String },
-  completedAt: { type: Date }
+  completedAt: { type: Date },
+
+  // أوردرات الكاشير (POS) + الإلغاء + السواق
+  source: { type: String, default: "web" },
+  paymentMethod: { type: String },
+  talabatNo: { type: String },
+  discountPercent: { type: Number, default: 0 },
+  discountAmount: { type: Number, default: 0 },
+  createdBy: { type: String },
+  driverName: { type: String },
+  cancelReason: { type: String },
+  cancelledBy: { type: String },
+  cancelledAt: { type: Date }
 });
 const Order = mongoose.model("Order", orderSchema);
+
+// عدّاد أرقام أوردرات الكاشير
+const counterSchema = new mongoose.Schema({
+  key: { type: String, unique: true },
+  seq: { type: Number, default: 0 }
+});
+const Counter = mongoose.model("Counter", counterSchema);
 
 // تقفيلات الشيفتات
 const shiftSchema = new mongoose.Schema({
@@ -127,7 +146,11 @@ const shiftSchema = new mongoose.Schema({
   count: { type: Number, default: 0 },
   total: { type: Number, default: 0 },
   delivery: { type: Number, default: 0 },
-  orders: { type: Array, default: [] }
+  orders: { type: Array, default: [] },
+  payments: { type: Object, default: {} },
+  talabat: { type: Number, default: 0 },
+  discounts: { type: Number, default: 0 },
+  cancelled: { type: Number, default: 0 }
 });
 const Shift = mongoose.model("Shift", shiftSchema);
 
@@ -645,17 +668,122 @@ app.get("/api/orders", requireAuth, async (req, res) => {
   }
 });
 
+// الحالات المسموحة للكاشير: لقدام بس. الأدمن بس يرجّع للخلف.
+const FORWARD_STATUS = {
+  pending: ["accepted", "completed", "cancelled"],
+  accepted: ["completed", "cancelled"],
+  completed: [],
+  cancelled: []
+};
+
 app.put("/api/orders/:id", requireAuth, async (req, res) => {
   try {
-    if (!req.body.status || !["pending", "accepted", "completed"].includes(req.body.status)) return res.status(400).json({ error: "حالة الأوردر غير صحيحة" });
+    const { status } = req.body || {};
+    if (!status || !["pending", "accepted", "completed", "cancelled"].includes(status)) return res.status(400).json({ error: "حالة الأوردر غير صحيحة" });
     const query = mongoose.Types.ObjectId.isValid(req.params.id) ? { $or: [{ _id: req.params.id }, { orderId: req.params.id }] } : { orderId: req.params.id };
-    const update = { status: req.body.status };
-    if (req.body.status === "accepted") { update.acceptedBy = req.user.name; update.acceptedAt = new Date(); }
-    if (req.body.status === "completed") { update.completedBy = req.user.name; update.completedAt = new Date(); }
+    const order = await Order.findOne(query);
+    if (!order) return res.status(404).json({ error: "الأوردر غير موجود" });
 
-    const updatedOrder = await Order.findOneAndUpdate(query, update, { new: true });
-    if (!updatedOrder) return res.status(404).json({ error: "الأوردر غير موجود" });
+    // نفس الحالة تاني: ما نغيرش حاجة (يمنع تكرار التسليم أو الحساب)
+    if (order.status === status) return res.json(order);
+
+    const isAdminUser = req.user?.role === "admin";
+    if (!isAdminUser && !(FORWARD_STATUS[order.status] || []).includes(status)) {
+      return res.status(403).json({ error: "مينفعش ترجّع أو تعدّل أوردر خلص. اطلب من الأدمن" });
+    }
+
+    const update = { status };
+    const unset = {};
+    if (status === "accepted") { update.acceptedBy = req.user.name; update.acceptedAt = new Date(); }
+    if (status === "completed") {
+      update.completedBy = req.user.name; update.completedAt = new Date();
+      if (order.orderType === "delivery") update.driverName = cleanText(req.body.driverName, 40);
+    }
+    if (status === "cancelled") {
+      const reason = cleanText(req.body.cancelReason, 200);
+      if (reason.length < 2) return res.status(400).json({ error: "اكتب سبب الإلغاء" });
+      update.cancelReason = reason; update.cancelledBy = req.user.name; update.cancelledAt = new Date();
+    }
+    if (status !== "completed") { unset.completedAt = ""; unset.completedBy = ""; unset.driverName = ""; }
+    if (status !== "cancelled") { unset.cancelReason = ""; unset.cancelledBy = ""; unset.cancelledAt = ""; }
+
+    const op = { $set: update };
+    if (Object.keys(unset).length) op.$unset = unset;
+
+    // الشرط على الحالة القديمة عشان لو دوسين في نفس اللحظة ما يتسجلوش مرتين
+    const updatedOrder = await Order.findOneAndUpdate({ _id: order._id, status: order.status }, op, { new: true });
+    if (!updatedOrder) return res.status(409).json({ error: "الأوردر اتغيّر قبل كده، حدّث الصفحة" });
     res.json(updatedOrder);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// أوردر من شاشة الكاشير (POS)
+const POS_PAYMENTS = ["cash", "visa", "instapay", "wallet"];
+const MAX_CASHIER_DISCOUNT = clampNumber(process.env.MAX_CASHIER_DISCOUNT ?? 50, 0, 100);
+
+app.post("/api/pos/orders", requireAuth, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const orderType = ["pickup", "delivery", "talabat"].includes(body.orderType) ? body.orderType : null;
+    if (!orderType) return res.status(400).json({ error: "نوع الأوردر غير صحيح" });
+
+    const paymentMethod = POS_PAYMENTS.includes(body.paymentMethod) ? body.paymentMethod : null;
+    if (!paymentMethod) return res.status(400).json({ error: "اختار طريقة الدفع" });
+    if (orderType === "talabat" && !["cash", "visa"].includes(paymentMethod)) return res.status(400).json({ error: "طلبات: كاش أو فيزا بس" });
+
+    const talabatNo = orderType === "talabat" ? cleanText(body.talabatNo, 30) : "";
+    if (orderType === "talabat" && !talabatNo) return res.status(400).json({ error: "اكتب رقم أوردر طلبات" });
+
+    const rawItems = Array.isArray(body.items) ? body.items.slice(0, 80) : [];
+    const items = rawItems.map((it) => ({
+      name: cleanText(it?.name, 200),
+      price: clampNumber(it?.price, 0, 100000),
+      quantity: Math.round(clampNumber(it?.quantity, 1, 99)),
+      modifiers: Array.isArray(it?.modifiers) ? it.modifiers.slice(0, 40).map((m) => cleanText(m, 200)).filter(Boolean) : [],
+      notes: cleanText(it?.notes, 300)
+    })).filter((it) => it.name);
+    if (items.length === 0) return res.status(400).json({ error: "الأوردر فاضي" });
+
+    const isAdminUser = req.user?.role === "admin";
+    const discountPercent = clampNumber(body.discountPercent, 0, 100);
+    if (!isAdminUser && discountPercent > MAX_CASHIER_DISCOUNT) {
+      return res.status(403).json({ error: `أقصى خصم للكاشير ${MAX_CASHIER_DISCOUNT}%` });
+    }
+
+    const itemsTotal = items.reduce((sum, it) => sum + it.price * it.quantity, 0);
+    const discountAmount = Math.round(itemsTotal * discountPercent / 100);
+
+    let customerName = cleanText(body.customerName, 80) || "-";
+    let customerPhone = cleanText(body.customerPhone, 20) || "-";
+    let customerAddress = "استلام من الفرع";
+    let zoneName = "استلام من الفرع";
+    let deliveryFee = 0;
+    if (orderType === "delivery") {
+      customerAddress = cleanText(body.customerAddress, 300);
+      if (!customerAddress) return res.status(400).json({ error: "اكتب عنوان التوصيل" });
+      if (customerPhone !== "-" && !/^\+?\d{6,15}$/.test(customerPhone)) return res.status(400).json({ error: "رقم التليفون غير صحيح" });
+      zoneName = cleanText(body.zoneName, 80) || "توصيل";
+      const zone = zoneName ? await DeliveryZone.findOne({ name: zoneName }) : null;
+      deliveryFee = zone ? zone.fee : clampNumber(body.deliveryFee, 0, 500);
+    } else if (orderType === "talabat") {
+      customerName = "طلبات"; customerPhone = "-"; customerAddress = "طلبات"; zoneName = "طلبات";
+    }
+
+    const grandTotal = itemsTotal - discountAmount + deliveryFee;
+
+    const counter = await Counter.findOneAndUpdate({ key: "pos" }, { $inc: { seq: 1 } }, { new: true, upsert: true });
+    const orderId = `P${counter.seq}`;
+
+    const saved = await new Order({
+      orderId, customerName, customerPhone, orderType, customerAddress, zoneName, deliveryFee,
+      items, itemsTotal, grandTotal, status: "accepted",
+      source: "pos", paymentMethod, talabatNo, discountPercent, discountAmount,
+      createdBy: req.user.name, acceptedBy: req.user.name, acceptedAt: new Date()
+    }).save();
+    console.log(`✅ POS order saved: #${saved.orderId} by ${req.user.name}`);
+    res.status(201).json(saved);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -697,7 +825,19 @@ app.post("/api/shifts/close", requireAuth, async (req, res) => {
 
     if (inShift.length === 0) return res.status(400).json({ error: "مفيش أوردرات مكتملة في الشيفت ده" });
 
+    const payments = {};
+    let talabat = 0;
+    let discounts = 0;
+    inShift.forEach((o) => {
+      discounts += Number(o.discountAmount) || 0;
+      if (o.orderType === "talabat") { talabat += Number(o.grandTotal) || 0; return; }
+      const k = o.paymentMethod || "cash";
+      payments[k] = (payments[k] || 0) + (Number(o.grandTotal) || 0);
+    });
+    const cancelled = await Order.countDocuments({ status: "cancelled", cancelledAt: { $gt: new Date(lastAt), $lte: now } });
+
     const shift = await Shift.create({
+      payments, talabat, discounts, cancelled,
       closedAt: now,
       closedBy: req.user.name,
       from: inShift[0].completedAt || inShift[0].createdAt,
