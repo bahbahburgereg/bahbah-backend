@@ -156,9 +156,14 @@ const counterSchema = new mongoose.Schema({
 });
 const Counter = mongoose.model("Counter", counterSchema);
 
-// تقفيلات الشيفتات
+// الشيفتات (فتح / حركات الدرج / تقفيل)
 const shiftSchema = new mongoose.Schema({
-  closedAt: { type: Date, default: Date.now },
+  status: { type: String, default: "closed" },
+  openedAt: { type: Date },
+  openedBy: { type: String },
+  openingCash: { type: Number, default: 0 },
+  movements: { type: Array, default: [] },
+  closedAt: { type: Date },
   closedBy: { type: String },
   from: { type: Date },
   count: { type: Number, default: 0 },
@@ -168,7 +173,12 @@ const shiftSchema = new mongoose.Schema({
   payments: { type: Object, default: {} },
   talabat: { type: Number, default: 0 },
   discounts: { type: Number, default: 0 },
-  cancelled: { type: Number, default: 0 }
+  cancelled: { type: Number, default: 0 },
+  report: { type: Object },
+  countedCash: { type: Number },
+  expectedCash: { type: Number },
+  difference: { type: Number },
+  notes: { type: String }
 });
 const Shift = mongoose.model("Shift", shiftSchema);
 
@@ -980,11 +990,109 @@ app.delete("/api/orders/:id", requireAuth, requireAdmin, async (req, res) => {
 });
 
 // =========================
-// SHIFTS
+// SHIFTS + REPORTS
 // =========================
-app.get("/api/shifts", requireAuth, async (req, res) => {
+const buildReport = async (from, to, shift = null) => {
+  const fromD = new Date(from), toD = new Date(to);
+  const [orders, cancelledList, catalog] = await Promise.all([
+    Order.find({ status: "completed", completedAt: { $gt: fromD, $lte: toD } }).lean(),
+    Order.find({ status: "cancelled", cancelledAt: { $gt: fromD, $lte: toD } }).select("grandTotal").lean(),
+    Item.find().select("name category").lean()
+  ]);
+  const catOf = new Map(catalog.map((i) => [i.name, i.category]));
+  const payments = {}, byType = {}, byCashier = {};
+  const catMap = new Map();
+  let total = 0, delivery = 0, discounts = 0, talabat = 0;
+
+  orders.sort((a, b) => new Date(a.completedAt) - new Date(b.completedAt));
+  for (const o of orders) {
+    const g = Number(o.grandTotal) || 0;
+    total += g;
+    delivery += Number(o.deliveryFee) || 0;
+    discounts += Number(o.discountAmount) || 0;
+    if (o.orderType === "talabat") talabat += g;
+    else { const k = o.paymentMethod || "cash"; payments[k] = (payments[k] || 0) + g; }
+
+    const t = (byType[o.orderType] = byType[o.orderType] || { count: 0, total: 0 });
+    t.count += 1; t.total += g;
+    const who = o.completedBy || o.createdBy || "-";
+    const c = (byCashier[who] = byCashier[who] || { count: 0, total: 0 });
+    c.count += 1; c.total += g;
+
+    for (const it of o.items || []) {
+      const catName = catOf.get(it.name) || "أخرى";
+      const qty = Number(it.quantity) || 0;
+      const rev = (Number(it.price) || 0) * qty;
+      if (!catMap.has(catName)) catMap.set(catName, { name: catName, qty: 0, total: 0, items: new Map() });
+      const cat = catMap.get(catName);
+      cat.qty += qty; cat.total += rev;
+      const row = cat.items.get(it.name) || { name: it.name, qty: 0, total: 0 };
+      row.qty += qty; row.total += rev;
+      cat.items.set(it.name, row);
+    }
+  }
+
+  const categories = [...catMap.values()]
+    .map((c) => ({ name: c.name, qty: c.qty, total: c.total, items: [...c.items.values()].sort((a, b) => b.qty - a.qty) }))
+    .sort((a, b) => b.total - a.total);
+
+  const report = {
+    from: fromD, to: toD, count: orders.length, total, delivery, discounts, talabat, payments, byType, byCashier,
+    cancelled: cancelledList.length,
+    cancelledTotal: cancelledList.reduce((s, o) => s + (Number(o.grandTotal) || 0), 0),
+    categories,
+    orders: orders.map((o) => ({ id: o.orderId, total: Number(o.grandTotal) || 0 }))
+  };
+
+  if (shift) {
+    const moves = shift.movements || [];
+    const cashIn = moves.filter((m) => m.type === "in").reduce((s, m) => s + m.amount, 0);
+    const cashOut = moves.filter((m) => m.type === "out").reduce((s, m) => s + m.amount, 0);
+    Object.assign(report, {
+      openedBy: shift.openedBy, openingCash: shift.openingCash || 0, movements: moves, cashIn, cashOut,
+      expectedCash: (shift.openingCash || 0) + (payments.cash || 0) + cashIn - cashOut
+    });
+  }
+  return report;
+};
+
+// الشيفت المفتوح دلوقتي + تقرير X لحظي
+app.get("/api/shifts/current", requireAuth, async (req, res) => {
   try {
-    res.json(await Shift.find().sort({ closedAt: -1 }).limit(90));
+    const shift = await Shift.findOne({ status: "open" }).lean();
+    if (!shift) return res.json({ shift: null });
+    res.json({ shift, report: await buildReport(shift.openedAt, new Date(), shift) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post("/api/shifts/open", requireAuth, async (req, res) => {
+  try {
+    if (await Shift.findOne({ status: "open" })) return res.status(400).json({ error: "فيه شيفت مفتوح بالفعل" });
+    const openingCash = clampNumber(req.body?.openingCash, 0, 10000000);
+    const shift = await Shift.create({ status: "open", openedAt: new Date(), openedBy: req.user.name, openingCash });
+    res.status(201).json(shift);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// إيداع / مصروف من الدرج
+app.post("/api/shifts/movement", requireAuth, async (req, res) => {
+  try {
+    const type = req.body?.type === "in" ? "in" : req.body?.type === "out" ? "out" : null;
+    const amount = clampNumber(req.body?.amount, 0, 10000000);
+    const reason = cleanText(req.body?.reason, 100);
+    if (!type || amount <= 0) return res.status(400).json({ error: "اكتب مبلغ صحيح" });
+    if (reason.length < 2) return res.status(400).json({ error: "اكتب السبب" });
+    const shift = await Shift.findOneAndUpdate(
+      { status: "open" },
+      { $push: { movements: { type, amount, reason, by: req.user.name, at: new Date() } } },
+      { new: true }
+    );
+    if (!shift) return res.status(400).json({ error: "مفيش شيفت مفتوح" });
+    res.json(shift);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -992,42 +1100,51 @@ app.get("/api/shifts", requireAuth, async (req, res) => {
 
 app.post("/api/shifts/close", requireAuth, async (req, res) => {
   try {
-    const last = await Shift.findOne().sort({ closedAt: -1 });
-    const lastAt = last ? new Date(last.closedAt).getTime() : 0;
+    const shift = await Shift.findOne({ status: "open" });
+    if (!shift) return res.status(400).json({ error: "مفيش شيفت مفتوح" });
+    const counted = Number(req.body?.countedCash);
+    if (req.body?.countedCash === "" || req.body?.countedCash == null || !Number.isFinite(counted) || counted < 0) {
+      return res.status(400).json({ error: "اكتب الكاش اللي عدّيته في الدرج" });
+    }
     const now = new Date();
+    const report = await buildReport(shift.openedAt, now, shift);
+    const closed = await Shift.findOneAndUpdate(
+      { _id: shift._id, status: "open" },
+      {
+        $set: {
+          status: "closed", closedAt: now, closedBy: req.user.name, from: shift.openedAt,
+          count: report.count, total: report.total, delivery: report.delivery, payments: report.payments,
+          talabat: report.talabat, discounts: report.discounts, cancelled: report.cancelled, orders: report.orders,
+          report, countedCash: counted, expectedCash: report.expectedCash, difference: counted - report.expectedCash,
+          notes: cleanText(req.body?.notes, 300)
+        }
+      },
+      { new: true }
+    );
+    if (!closed) return res.status(409).json({ error: "الشيفت اتقفل قبل كده، حدّث الصفحة" });
+    if (req.body?.handover) {
+      await Shift.create({ status: "open", openedAt: now, openedBy: req.user.name, openingCash: counted });
+    }
+    res.json(closed);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
-    const completed = await Order.find({ status: "completed" });
-    const inShift = completed
-      .filter((o) => {
-        const t = new Date(o.completedAt || o.createdAt).getTime();
-        return t > lastAt && t <= now.getTime();
-      })
-      .sort((a, b) => new Date(a.completedAt || a.createdAt) - new Date(b.completedAt || b.createdAt));
+app.get("/api/shifts", requireAuth, async (req, res) => {
+  try {
+    res.json(await Shift.find({ status: { $ne: "open" } }).sort({ closedAt: -1 }).limit(60));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
-    if (inShift.length === 0) return res.status(400).json({ error: "مفيش أوردرات مكتملة في الشيفت ده" });
-
-    const payments = {};
-    let talabat = 0;
-    let discounts = 0;
-    inShift.forEach((o) => {
-      discounts += Number(o.discountAmount) || 0;
-      if (o.orderType === "talabat") { talabat += Number(o.grandTotal) || 0; return; }
-      const k = o.paymentMethod || "cash";
-      payments[k] = (payments[k] || 0) + (Number(o.grandTotal) || 0);
-    });
-    const cancelled = await Order.countDocuments({ status: "cancelled", cancelledAt: { $gt: new Date(lastAt), $lte: now } });
-
-    const shift = await Shift.create({
-      payments, talabat, discounts, cancelled,
-      closedAt: now,
-      closedBy: req.user.name,
-      from: inShift[0].completedAt || inShift[0].createdAt,
-      count: inShift.length,
-      total: inShift.reduce((sum, o) => sum + (Number(o.grandTotal) || 0), 0),
-      delivery: inShift.reduce((sum, o) => sum + (Number(o.deliveryFee) || 0), 0),
-      orders: inShift.map((o) => ({ id: o.orderId, total: Number(o.grandTotal) || 0 }))
-    });
-    res.json(shift);
+// تقرير فترة (يوم كامل) - للأدمن
+app.get("/api/reports/range", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const from = new Date(String(req.query.from)), to = new Date(String(req.query.to));
+    if (isNaN(from) || isNaN(to) || to <= from || to - from > 40 * 86400000) return res.status(400).json({ error: "الفترة غير صحيحة" });
+    res.json(await buildReport(from, to, null));
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
