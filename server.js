@@ -104,7 +104,13 @@ const settingsSchema = new mongoose.Schema({
   heroTitleAr: { type: String, default: "أقوى العروض 🔥" },
   heroTitleEn: { type: String, default: "Strongest Offers 🔥" },
   logoImage: { type: String, default: "" },
-  promoBannerImage: { type: String, default: "" }
+  promoBannerImage: { type: String, default: "" },
+
+  // مواعيد استقبال الأوردرات (فتح / قفل)
+  orderingMode: { type: String, enum: ["auto", "open", "closed"], default: "auto" },
+  openTime: { type: String, default: "12:00" },
+  closeTime: { type: String, default: "03:00" },
+  closedMessage: { type: String, default: "" }
 });
 const Settings = mongoose.model("Settings", settingsSchema);
 
@@ -694,6 +700,87 @@ const clampNumber = (value, min, max) => {
   return Math.min(Math.max(n, min), max);
 };
 
+// =========================
+// STORE HOURS (فتح / قفل استقبال الأوردرات)
+// =========================
+const STORE_TZ = "Africa/Cairo";
+const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+const DEFAULT_CLOSED_MSG = "قفلنا دلوقتي 🌙 هنفتح تاني الصبح بإذن الله، تنوّر بحبح برجر في مواعيدنا!";
+
+const toMin = (s) => { const [h, m] = String(s).split(":").map(Number); return h * 60 + m; };
+const cairoMinutes = () => {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: STORE_TZ, hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(new Date());
+  const h = Number(parts.find((p) => p.type === "hour").value) % 24;
+  const m = Number(parts.find((p) => p.type === "minute").value);
+  return h * 60 + m;
+};
+// بيدعم الميعاد اللي بعد نص الليل (مثلاً 12:00 ← 03:00)
+const inWindow = (now, open, close) => (open === close ? true : open < close ? now >= open && now < close : now >= open || now < close);
+
+let storeCfgCache = { at: 0, cfg: null };
+const loadStoreCfg = async () => {
+  if (storeCfgCache.cfg && Date.now() - storeCfgCache.at < 5000) return storeCfgCache.cfg;
+  const s = await Settings.findOne().lean();
+  const cfg = {
+    mode: ["auto", "open", "closed"].includes(s?.orderingMode) ? s.orderingMode : "auto",
+    openTime: TIME_RE.test(s?.openTime || "") ? s.openTime : "12:00",
+    closeTime: TIME_RE.test(s?.closeTime || "") ? s.closeTime : "03:00",
+    customMessage: s?.closedMessage || ""
+  };
+  storeCfgCache = { at: Date.now(), cfg };
+  return cfg;
+};
+
+const getStoreStatus = async () => {
+  try {
+    const cfg = await loadStoreCfg();
+    const isOpen = cfg.mode === "open" ? true : cfg.mode === "closed" ? false : inWindow(cairoMinutes(), toMin(cfg.openTime), toMin(cfg.closeTime));
+    return { isOpen, mode: cfg.mode, openTime: cfg.openTime, closeTime: cfg.closeTime, customMessage: cfg.customMessage, message: isOpen ? "" : (cfg.customMessage || DEFAULT_CLOSED_MSG) };
+  } catch (err) {
+    // لو قاعدة البيانات فيها مشكلة ما نوقفش الأوردرات
+    return { isOpen: true, mode: "auto", openTime: "12:00", closeTime: "03:00", customMessage: "", message: "" };
+  }
+};
+
+const saveStoreCfg = async (patch) => {
+  let s = await Settings.findOne();
+  if (!s) s = new Settings({});
+  Object.assign(s, patch);
+  await s.save();
+  storeCfgCache = { at: 0, cfg: null };
+  listCache.settings = null;
+};
+
+// عام: الموقع بيسأله كل دقيقة
+app.get("/api/store-status", async (req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json(await getStoreStatus());
+});
+
+// الكاشير والأدمن: فتح / قفل / تلقائي
+app.put("/api/store-mode", requireAuth, async (req, res) => {
+  try {
+    const mode = req.body?.mode;
+    if (!["auto", "open", "closed"].includes(mode)) return res.status(400).json({ error: "الوضع غير صحيح" });
+    await saveStoreCfg({ orderingMode: mode });
+    res.json(await getStoreStatus());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// الأدمن فقط: المواعيد ورسالة القفل
+app.put("/api/store-hours", requireAuth, requireAdmin, async (req, res) => {
+  try {
+    const { openTime, closeTime, closedMessage } = req.body || {};
+    if (!TIME_RE.test(String(openTime)) || !TIME_RE.test(String(closeTime))) return res.status(400).json({ error: "اكتب الوقت بشكل صحيح" });
+    await saveStoreCfg({ openTime, closeTime, closedMessage: cleanText(closedMessage, 200) });
+    res.json(await getStoreStatus());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const buildOrderFromBody = (body = {}, zoneFee = null) => {
   const orderId = cleanText(body.orderId, 30);
   if (!/^[A-Za-z0-9-]{4,30}$/.test(orderId)) return { error: "رقم الأوردر غير صحيح" };
@@ -732,6 +819,10 @@ const buildOrderFromBody = (body = {}, zoneFee = null) => {
 
 app.post("/api/orders", orderLimiter, async (req, res) => {
   try {
+    // لو الموقع مقفول (يدوي أو حسب المواعيد) نرفض الأوردر
+    const status = await getStoreStatus();
+    if (!status.isOpen) return res.status(403).json({ error: status.message, closed: true });
+
     const body = req.body || {};
     let zoneFee = null;
     if (body.orderType === "delivery") {
