@@ -2122,15 +2122,21 @@ const buildReport = async (from, to, shift = null) => {
     cashier.count += 1; cashier.total += g; cashier.discounts += Number(o.discountAmount) || 0;
 
     for (const it of o.items || []) {
-      const catName = catOf.get(it.name) || "أخرى";
+      const baseName = String(it.name || "صنف بدون اسم");
+      const catName = catOf.get(baseName) || "أخرى";
       const qty = Number(it.quantity) || 0;
       const revenue = (Number(it.price) || 0) * qty;
       if (!catMap.has(catName)) catMap.set(catName, { name: catName, qty: 0, total: 0, items: new Map() });
       const cat = catMap.get(catName);
       cat.qty += qty; cat.total += revenue;
-      const row = cat.items.get(it.name) || { name: it.name, qty: 0, total: 0 };
+      // افصل أحجام/أنواع الدابل والتربل في تقرير المطبخ بدل دمجها تحت اسم واحد.
+      const mods = Array.isArray(it.modifiers) ? it.modifiers.join(" ") : String(it.modifiers || "");
+      const variantMatch = `${baseName} ${mods}`.match(/\b(double|triple|single|دابل|تربل|سنجل)\b/i);
+      const variant = variantMatch ? variantMatch[0] : "";
+      const kitchenName = variant && !baseName.toLowerCase().includes(variant.toLowerCase()) ? `${baseName} - ${variant}` : baseName;
+      const row = cat.items.get(kitchenName) || { name: kitchenName, qty: 0, total: 0 };
       row.qty += qty; row.total += revenue;
-      cat.items.set(it.name, row);
+      cat.items.set(kitchenName, row);
     }
   }
 
