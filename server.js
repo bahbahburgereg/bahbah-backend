@@ -2039,7 +2039,10 @@ const getDriverBalances = async () => {
     }
   }
   return [...balances.values()]
-    .map((row) => ({ ...row, balance: Math.max(0, Math.round((row.due - row.settled) * 100) / 100 })) )
+    .map((row) => {
+      const balance = Math.max(0, row.due - row.settled);
+      return { ...row, balance: Number(balance.toFixed(2)) };
+    })
     .filter((row) => row.balance > 0.009)
     .sort((a, b) => b.balance - a.balance);
 };
