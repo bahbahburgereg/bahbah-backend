@@ -239,6 +239,9 @@ const Settings = mongoose.model("Settings", settingsSchema);
 const orderSchema = new mongoose.Schema({
 
   orderId: { type: String, required: true, unique: true },
+  // رقم إيصال داخل الوردية فقط؛ لا يغيّر رقم أوردر الموقع أو رقم طلبات اليدوي
+  shiftReceiptNo: { type: Number },
+  shiftId: { type: mongoose.Schema.Types.ObjectId, ref: "Shift" },
 
   customerName: { type: String, required: true },
 
@@ -345,6 +348,7 @@ const shiftSchema = new mongoose.Schema({
   handoverAcceptedAt: { type: Date },
 
   openingCash: { type: Number, default: 0 },
+  receiptSeq: { type: Number, default: 0 },
 
   movements: { type: Array, default: [] },
 
@@ -1965,10 +1969,18 @@ app.post("/api/pos/orders", requireAuth, async (req, res) => {
     }
 
     const grandTotal = itemsTotal - discountAmount + deliveryFee;
+    // رقم قاعدة البيانات يظل فريدًا، أما رقم الإيصال فيبدأ من 1 في كل وردية.
+    const currentShift = await Shift.findOneAndUpdate(
+      { _id: openShift._id, status: "open", openedBy: req.user.name },
+      { $inc: { receiptSeq: 1 } },
+      { new: true }
+    );
+    if (!currentShift) return res.status(409).json({ error: "الوردية اتقفلت، افتح وردية جديدة قبل تسجيل الأوردر" });
     const counter = await Counter.findOneAndUpdate({ key: "pos" }, { $inc: { seq: 1 } }, { new: true, upsert: true });
     const orderId = `P${counter.seq}`;
     const saved = await new Order({
-      orderId, customerName, customerPhone, orderType, customerAddress, zoneName, deliveryFee,
+      orderId, shiftReceiptNo: currentShift.receiptSeq, shiftId: currentShift._id,
+      customerName, customerPhone, orderType, customerAddress, zoneName, deliveryFee,
       items, itemsTotal, grandTotal, status: "accepted", source: "pos", paymentMethod,
       talabatNo, discountPercent, discountAmount, discountReason,
       createdBy: req.user.name, acceptedBy: req.user.name, acceptedAt: new Date()
