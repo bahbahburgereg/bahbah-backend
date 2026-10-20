@@ -332,6 +332,18 @@ const shiftSchema = new mongoose.Schema({
 
   openedBy: { type: String },
 
+  openedById: { type: String },
+
+  handoverTo: { type: String, default: "" },
+
+  handoverCash: { type: Number },
+
+  handoverStatus: { type: String, default: "none" },
+
+  handoverAcceptedBy: { type: String, default: "" },
+
+  handoverAcceptedAt: { type: Date },
+
   openingCash: { type: Number, default: 0 },
 
   movements: { type: Array, default: [] },
@@ -1840,6 +1852,10 @@ app.put("/api/orders/:id", requireAuth, async (req, res) => {
     if (status === "accepted") { update.acceptedBy = req.user.name; update.acceptedAt = new Date(); }
 
     if (status === "completed") {
+      if (req.user?.role !== "admin") {
+        const cashierShift = await Shift.findOne({ status: "open", openedBy: req.user.name }).select("_id").lean();
+        if (!cashierShift) return res.status(400).json({ error: "افتح ورديتك قبل تسليم الأوردر" });
+      }
       update.completedBy = req.user.name; update.completedAt = new Date();
       if (order.orderType === "delivery") {
         const driverName = cleanText(req.body.driverName, 40);
@@ -1899,8 +1915,8 @@ app.put("/api/orders/:id", requireAuth, async (req, res) => {
 app.post("/api/pos/orders", requireAuth, async (req, res) => {
   try {
     const body = req.body || {};
-    const openShift = await Shift.findOne({ status: "open" }).select("_id").lean();
-    if (!openShift) return res.status(400).json({ error: "افتح وردية الأول" });
+    const openShift = await Shift.findOne({ status: "open", openedBy: req.user.name }).select("_id").lean();
+    if (!openShift) return res.status(400).json({ error: "افتح ورديتك الأول" });
 
     const orderType = ["pickup", "delivery", "talabat"].includes(body.orderType) ? body.orderType : null;
     if (!orderType) return res.status(400).json({ error: "نوع الأوردر غير صحيح" });
@@ -2066,8 +2082,20 @@ const buildReport = async (from, to, shift = null) => {
   const catMap = new Map();
   let total = 0, delivery = 0, discounts = 0, talabat = 0, talabatCash = 0, talabatVisa = 0, driverCash = 0;
 
-  orders.sort((a, b) => new Date(a.completedAt || a.createdAt) - new Date(b.completedAt || b.createdAt));
-  for (const o of orders) {
+  // كل تقرير وردية يخص الكاشير الذي فتحها فقط، ولا يخلط مبيعات الكاشير الآخر.
+  const shiftOrders = shift
+    ? orders.filter((o) => {
+        const cashierName = String(shift.openedBy || "");
+        if (!cashierName) return true;
+        if (o.source === "pos") return String(o.createdBy || o.completedBy || "") === cashierName;
+        return String(o.completedBy || "") === cashierName;
+      })
+    : orders;
+  const shiftCancelled = shift
+    ? cancelledList.filter((o) => !o.cancelledBy || String(o.cancelledBy) === String(shift.openedBy || ""))
+    : cancelledList;
+  shiftOrders.sort((a, b) => new Date(a.completedAt || a.createdAt) - new Date(b.completedAt || b.createdAt));
+  for (const o of shiftOrders) {
     const g = Number(o.grandTotal) || 0;
     total += g;
     delivery += Number(o.deliveryFee) || 0;
@@ -2111,12 +2139,12 @@ const buildReport = async (from, to, shift = null) => {
     .sort((a, b) => b.total - a.total);
 
   const report = {
-    from: fromD, to: toD, count: orders.length, total, delivery, discounts, talabat, talabatCash, talabatVisa, driverCash,
-    payments, byType, byCashier, cancelled: cancelledList.length,
-    cancelledTotal: cancelledList.reduce((sum, order) => sum + (Number(order.grandTotal) || 0), 0),
-    cancelledPrinted: cancelledList.filter((order) => order.cancelledAfterPrint).length,
+    from: fromD, to: toD, count: shiftOrders.length, total, netSales: total, delivery, discounts, talabat, talabatCash, talabatVisa, driverCash,
+    payments, byType, byCashier, cancelled: shiftCancelled.length,
+    cancelledTotal: shiftCancelled.reduce((sum, order) => sum + (Number(order.grandTotal) || 0), 0),
+    cancelledPrinted: shiftCancelled.filter((order) => order.cancelledAfterPrint).length,
     categories,
-    orders: orders.map((o) => ({ id: o.orderId, total: Number(o.grandTotal) || 0 }))
+    orders: shiftOrders.map((o) => ({ id: o.orderId, total: Number(o.grandTotal) || 0 }))
   };
 
   if (shift) {
@@ -2155,9 +2183,12 @@ app.get("/api/shifts/current", requireAuth, async (req, res) => {
 
   try {
 
-    const shift = await Shift.findOne({ status: "open" }).lean();
+    const shift = await Shift.findOne({ status: "open", openedBy: req.user.name }).lean();
 
-    if (!shift) return res.json({ shift: null });
+    if (!shift) {
+      const pendingHandover = await Shift.findOne({ status: "closed", handoverTo: req.user.name, handoverStatus: "pending" }).sort({ closedAt: -1 }).lean();
+      return res.json({ shift: null, pendingHandover: pendingHandover ? { shiftId: pendingHandover._id, from: pendingHandover.closedBy, amount: pendingHandover.handoverCash, closedAt: pendingHandover.closedAt } : null });
+    }
 
     const payload = { shift, report: await buildReport(shift.openedAt, new Date(), shift) };
     res.json(req.user?.role === "admin" ? payload : redactCurrentShiftForCashier(payload));
@@ -2176,11 +2207,19 @@ app.post("/api/shifts/open", requireAuth, async (req, res) => {
 
   try {
 
-    if (await Shift.findOne({ status: "open" })) return res.status(400).json({ error: "فيه شيفت مفتوح بالفعل" });
+    if (await Shift.findOne({ status: "open", openedBy: req.user.name })) return res.status(400).json({ error: "عندك وردية مفتوحة بالفعل" });
 
     const openingCash = clampNumber(req.body?.openingCash, 0, 10000000);
-
-    const shift = await Shift.create({ status: "open", openedAt: new Date(), openedBy: req.user.name, openingCash });
+    const pendingHandover = await Shift.findOne({ status: "closed", handoverTo: req.user.name, handoverStatus: "pending" }).sort({ closedAt: -1 });
+    if (pendingHandover) {
+      const transferred = Number(pendingHandover.handoverCash) || 0;
+      if (Math.abs(openingCash - transferred) > 0.009) return res.status(400).json({ error: `مبلغ الاستلام لازم يطابق النقدية المسلّمة (${transferred} ج.م)` });
+      pendingHandover.handoverStatus = "accepted";
+      pendingHandover.handoverAcceptedBy = req.user.name;
+      pendingHandover.handoverAcceptedAt = new Date();
+      await pendingHandover.save();
+    }
+    const shift = await Shift.create({ status: "open", openedAt: new Date(), openedBy: req.user.name, openedById: String(req.user.id || ""), openingCash });
     void sendTelegramAlert(`🟢 فتح وردية\nبواسطة: ${req.user.name}\nرصيد الافتتاح: ${openingCash} ج.م`);
     res.status(201).json(shift);
 
@@ -2212,7 +2251,7 @@ app.post("/api/shifts/movement", requireAuth, async (req, res) => {
 
     const shift = await Shift.findOneAndUpdate(
 
-      { status: "open" },
+      { status: "open", openedBy: req.user.name },
 
       { $push: { movements: { type, amount, reason, by: req.user.name, at: new Date(), category: "cash_movement" } } },
 
@@ -2240,8 +2279,8 @@ app.post("/api/shifts/driver-settlement", requireAuth, async (req, res) => {
     const amount = clampNumber(req.body?.amount, 0, 10000000);
     if (!driverName) return res.status(400).json({ error: "اكتب اسم السواق" });
     if (amount <= 0) return res.status(400).json({ error: "اكتب مبلغ تسوية صحيح" });
-    const shift = await Shift.findOne({ status: "open" });
-    if (!shift) return res.status(400).json({ error: "مفيش شيفت مفتوح" });
+    const shift = await Shift.findOne({ status: "open", openedBy: req.user.name });
+    if (!shift) return res.status(400).json({ error: "مفيش وردية مفتوحة لحسابك" });
     const balances = await getDriverBalances();
     const row = balances.find((item) => item.driverName === driverName);
     const balance = row?.balance || 0;
@@ -2257,52 +2296,58 @@ app.post("/api/shifts/driver-settlement", requireAuth, async (req, res) => {
 
 app.post("/api/shifts/close", requireAuth, async (req, res) => {
   try {
-    const shift = await Shift.findOne({ status: "open" });
-    if (!shift) return res.status(400).json({ error: "مفيش شيفت مفتوح" });
+    const shift = await Shift.findOne({ status: "open", openedBy: req.user.name });
+    if (!shift) return res.status(400).json({ error: "مفيش وردية مفتوحة لحسابك" });
     const counted = Number(req.body?.countedCash);
     if (req.body?.countedCash === "" || req.body?.countedCash == null || !Number.isFinite(counted) || counted < 0) {
       return res.status(400).json({ error: "اكتب الكاش اللي عدّيته في الدرج" });
     }
+    const handoverTo = cleanText(req.body?.handoverTo, 80);
+    if (handoverTo) {
+      if (handoverTo === req.user.name) return res.status(400).json({ error: "اختار كاشير تاني لاستلام الوردية" });
+      const recipient = await Staff.findOne({ name: handoverTo, role: "cashier", active: true }).select("_id name").lean();
+      if (!recipient) return res.status(400).json({ error: "اسم الكاشير المستلم غير موجود أو غير نشط" });
+      if (await Shift.findOne({ status: "open", openedBy: handoverTo })) return res.status(409).json({ error: "الكاشير المستلم عنده وردية مفتوحة بالفعل" });
+    }
     const now = new Date();
     const report = await buildReport(shift.openedAt, now, shift);
     const closed = await Shift.findOneAndUpdate(
-      { _id: shift._id, status: "open" },
+      { _id: shift._id, status: "open", openedBy: req.user.name },
       { $set: {
         status: "closed", closedAt: now, closedBy: req.user.name, from: shift.openedAt,
         count: report.count, total: report.total, delivery: report.delivery, payments: report.payments,
         talabat: report.talabat, discounts: report.discounts, cancelled: report.cancelled, orders: report.orders,
         report, countedCash: counted, expectedCash: report.expectedCash, difference: counted - report.expectedCash,
-        notes: cleanText(req.body?.notes, 300)
+        notes: cleanText(req.body?.notes, 300), handoverTo: handoverTo || "",
+        handoverCash: handoverTo ? counted : undefined, handoverStatus: handoverTo ? "pending" : "none"
       } },
       { new: true }
     );
-    if (!closed) return res.status(409).json({ error: "الشيفت اتقفل قبل كده، حدّث الصفحة" });
-    if (req.body?.handover) {
-      await Shift.create({ status: "open", openedAt: now, openedBy: req.user.name, openingCash: counted });
-      void sendTelegramAlert(`🔄 تسليم وردية وفتح وردية جديدة\nبواسطة: ${req.user.name}\nالكاش المعدود للوردية الجديدة: ${counted} ج.م`);
-    }
+    if (!closed) return res.status(409).json({ error: "الوردية اتقفلت قبل كده، حدّث الصفحة" });
     const difference = Number(closed.difference) || 0;
-    void sendTelegramAlert(`🔒 تقفيل وردية\nبواسطة: ${req.user.name}\nالمبيعات: ${Number(closed.total) || 0} ج.م\nالمتوقع في الدرج: ${Number(closed.expectedCash) || 0} ج.م\nالمعدود: ${counted} ج.م\n${difference === 0 ? "الدرج مظبوط" : difference > 0 ? `زيادة: ${difference} ج.م` : `عجز: ${Math.abs(difference)} ج.م`}`);
-    if (req.user?.role === "admin") return res.json(closed);
-    const safe = closed.toObject();
-    delete safe.countedCash; delete safe.expectedCash; delete safe.difference;
-    if (safe.report) {
-      safe.report = { ...safe.report };
-      delete safe.report.expectedCash; delete safe.report.openingCash; delete safe.report.cashIn; delete safe.report.cashOut; delete safe.report.driverCash; delete safe.report.movements;
-      safe.report.payments = { ...(safe.report.payments || {}) }; delete safe.report.payments.cash;
-    }
-    res.json(safe);
+    if (handoverTo) void sendTelegramAlert(`🔄 تسليم وردية معلّق
+من: ${req.user.name}
+إلى: ${handoverTo}
+النقدية المسلّمة: ${counted} ج.م`);
+    void sendTelegramAlert(`🔒 تقفيل وردية
+بواسطة: ${req.user.name}
+المبيعات: ${Number(closed.total) || 0} ج.م
+المتوقع في الدرج: ${Number(closed.expectedCash) || 0} ج.م
+المعدود: ${counted} ج.م
+${difference === 0 ? "الدرج مظبوط" : difference > 0 ? `زيادة: ${difference} ج.م` : `عجز: ${Math.abs(difference)} ج.م`}`);
+    res.json(closed);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
 
-app.get("/api/shifts", requireAuth, requireAdmin, async (req, res) => {
+app.get("/api/shifts", requireAuth, async (req, res) => {
 
   try {
 
-    res.json(await Shift.find({ status: { $ne: "open" } }).sort({ closedAt: -1 }).limit(60));
+    const filter = req.user?.role === "admin" ? { status: { $ne: "open" } } : { status: "closed", openedBy: req.user.name };
+    res.json(await Shift.find(filter).sort({ closedAt: -1 }).limit(60));
 
   } catch (err) {
 
