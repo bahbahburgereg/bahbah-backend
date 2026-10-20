@@ -2311,6 +2311,10 @@ app.post("/api/shifts/close", requireAuth, async (req, res) => {
     }
     const now = new Date();
     const report = await buildReport(shift.openedAt, now, shift);
+    const closeNotes = cleanText(req.body?.notes, 300);
+    if (Math.abs(counted - (Number(report.expectedCash) || 0)) > 0.009 && !closeNotes.toLowerCase().includes("سبب فرق النقدية")) {
+      return res.status(400).json({ error: "فيه عجز أو زيادة. اكتب سبب فرق النقدية قبل اعتماد التقفيل" });
+    }
     const closed = await Shift.findOneAndUpdate(
       { _id: shift._id, status: "open", openedBy: req.user.name },
       { $set: {
@@ -2318,7 +2322,7 @@ app.post("/api/shifts/close", requireAuth, async (req, res) => {
         count: report.count, total: report.total, delivery: report.delivery, payments: report.payments,
         talabat: report.talabat, discounts: report.discounts, cancelled: report.cancelled, orders: report.orders,
         report, countedCash: counted, expectedCash: report.expectedCash, difference: counted - report.expectedCash,
-        notes: cleanText(req.body?.notes, 300), handoverTo: handoverTo || "",
+        notes: closeNotes, handoverTo: handoverTo || "",
         handoverCash: handoverTo ? counted : undefined, handoverStatus: handoverTo ? "pending" : "none"
       } },
       { new: true }
