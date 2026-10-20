@@ -2298,54 +2298,26 @@ app.post("/api/shifts/close", requireAuth, async (req, res) => {
   try {
     const shift = await Shift.findOne({ status: "open", openedBy: req.user.name });
     if (!shift) return res.status(400).json({ error: "مفيش وردية مفتوحة لحسابك" });
-    const counted = Number(req.body?.countedCash);
-    if (req.body?.countedCash === "" || req.body?.countedCash == null || !Number.isFinite(counted) || counted < 0) {
-      return res.status(400).json({ error: "اكتب الكاش اللي عدّيته في الدرج" });
-    }
-    const handoverTo = cleanText(req.body?.handoverTo, 80);
-    if (handoverTo) {
-      if (handoverTo === req.user.name) return res.status(400).json({ error: "اختار كاشير تاني لاستلام الوردية" });
-      const recipient = await Staff.findOne({ name: handoverTo, role: "cashier", active: true }).select("_id name").lean();
-      if (!recipient) return res.status(400).json({ error: "اسم الكاشير المستلم غير موجود أو غير نشط" });
-      if (await Shift.findOne({ status: "open", openedBy: handoverTo })) return res.status(409).json({ error: "الكاشير المستلم عنده وردية مفتوحة بالفعل" });
-    }
     const now = new Date();
     const report = await buildReport(shift.openedAt, now, shift);
     const closeNotes = cleanText(req.body?.notes, 300);
-    if (Math.abs(counted - (Number(report.expectedCash) || 0)) > 0.009 && !closeNotes.toLowerCase().includes("سبب فرق النقدية")) {
-      return res.status(400).json({ error: "فيه عجز أو زيادة. اكتب سبب فرق النقدية قبل اعتماد التقفيل" });
-    }
     const closed = await Shift.findOneAndUpdate(
       { _id: shift._id, status: "open", openedBy: req.user.name },
       { $set: {
         status: "closed", closedAt: now, closedBy: req.user.name, from: shift.openedAt,
         count: report.count, total: report.total, delivery: report.delivery, payments: report.payments,
         talabat: report.talabat, discounts: report.discounts, cancelled: report.cancelled, orders: report.orders,
-        report, countedCash: counted, expectedCash: report.expectedCash, difference: counted - report.expectedCash,
-        notes: closeNotes, handoverTo: handoverTo || "",
-        handoverCash: handoverTo ? counted : undefined, handoverStatus: handoverTo ? "pending" : "none"
-      } },
+        report, expectedCash: report.expectedCash, notes: closeNotes, handoverTo: "", handoverStatus: "none"
+      }, $unset: { countedCash: 1, difference: 1, handoverCash: 1 } },
       { new: true }
     );
     if (!closed) return res.status(409).json({ error: "الوردية اتقفلت قبل كده، حدّث الصفحة" });
-    const difference = Number(closed.difference) || 0;
-    if (handoverTo) void sendTelegramAlert(`🔄 تسليم وردية معلّق
-من: ${req.user.name}
-إلى: ${handoverTo}
-النقدية المسلّمة: ${counted} ج.م`);
-    void sendTelegramAlert(`🔒 تقفيل وردية
-بواسطة: ${req.user.name}
-المبيعات: ${Number(closed.total) || 0} ج.م
-المتوقع في الدرج: ${Number(closed.expectedCash) || 0} ج.م
-المعدود: ${counted} ج.م
-${difference === 0 ? "الدرج مظبوط" : difference > 0 ? `زيادة: ${difference} ج.م` : `عجز: ${Math.abs(difference)} ج.م`}`);
+    void sendTelegramAlert(`🔒 تقفيل وردية\nبواسطة: ${req.user.name}\nصافي المبيعات (Net Sales): ${Number(closed.total) || 0} ج.م`);
     res.json(closed);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
-
-
 app.get("/api/shifts", requireAuth, async (req, res) => {
 
   try {
