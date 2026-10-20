@@ -1628,7 +1628,7 @@ const groupsForItem = (item) => {
 const discountedComponentPrice = (price, discount) => Math.round((Number(price) || 0) * (1 - (Number(discount) || 0) / 100));
 
 // السعر لا يُؤخذ من المتصفح؛ يُعاد بناؤه من الصنف والاختيارات المحفوظة في MongoDB.
-const priceOrderItemsFromCatalog = async (rawItems, maxItems = 80) => {
+const priceOrderItemsFromCatalog = async (rawItems, maxItems = 80, applyMenuDiscount = true) => {
   if (!Array.isArray(rawItems)) return { error: "الأوردر فاضي" };
   const limited = rawItems.slice(0, maxItems);
   if (limited.length === 0) return { error: "الأوردر فاضي" };
@@ -1686,7 +1686,8 @@ const priceOrderItemsFromCatalog = async (rawItems, maxItems = 80) => {
       }
     }
 
-    const discount = Number(item.discount) || 0;
+    // طلبات الموقع تطبق خصم المنيو، أما الكاشير فيستخدم السعر الأصلي دائمًا.
+    const discount = applyMenuDiscount ? (Number(item.discount) || 0) : 0;
     let unitPrice = Number(item.price) > 0 ? discountedComponentPrice(item.price, discount) : 0;
     const modifiers = [];
     for (let gi = 0; gi < groups.length; gi += 1) {
@@ -1915,7 +1916,7 @@ app.post("/api/pos/orders", requireAuth, async (req, res) => {
       if (duplicate) return res.status(409).json({ error: "رقم أوردر طلبات ده متسجل قبل كده" });
     }
 
-    const priced = await priceOrderItemsFromCatalog(body.items, 80);
+    const priced = await priceOrderItemsFromCatalog(body.items, 80, false);
     if (priced.error) return res.status(400).json({ error: priced.error });
     const items = priced.items;
 
